@@ -88,6 +88,12 @@ class Config(BaseModel):
         ),
     )
 
+    waifu_max_partners: int = Field(
+        default=1,
+        ge=0,
+        le=100,
+        description="一个人最多能娶几个老婆；0 = 不限；默认 1",
+    )
     waifu_member_ttl_days: int = Field(
         default=DEFAULT_MEMBER_TTL_DAYS,
         ge=0,
