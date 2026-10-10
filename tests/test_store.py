@@ -118,3 +118,56 @@ def test_daily_is_scoped_by_date(tmp_store):
 
     store.set_daily(group_id=100, user_id=1, date_key="2026-10-09", partner_id=2)
     assert store.get_daily(100, 1, "2026-10-10") is None
+
+
+def test_marry_writes_both_directions(tmp_store):
+    from nonebot_plugin_waifu import store
+
+    store.marry(group_id=100, a=1, b=2)
+    assert store.get_partner(100, 1) == 2
+    assert store.get_partner(100, 2) == 1
+    assert store.is_married(100, 1) and store.is_married(100, 2)
+
+
+def test_marry_is_atomic_both_rows_present(tmp_store):
+    """两行必须在同一事务：任一行缺失都会让「单向已婚」这种脏状态出现。"""
+    from nonebot_plugin_waifu import store
+
+    store.marry(group_id=100, a=7, b=8)
+    married_ids = store.married_ids(100)
+    assert married_ids == {7, 8}
+
+
+def test_divorce_clears_both_directions(tmp_store):
+    from nonebot_plugin_waifu import store
+
+    store.marry(group_id=100, a=1, b=2)
+    store.divorce(group_id=100, a=1, b=2)
+    assert store.get_partner(100, 1) is None
+    assert store.get_partner(100, 2) is None
+    assert not store.is_married(100, 1)
+
+
+def test_divorce_clears_marriage_and_sets_cd_for_requester_only(tmp_store):
+    """离婚后：关系清空，**只有发起方**有冷却。"""
+    from nonebot_plugin_waifu import store
+
+    store.marry(group_id=100, a=1, b=2)
+    store.divorce(group_id=100, a=1, b=2)
+    store.set_divorce_cd(group_id=100, user_id=1, until=999999.0)
+    assert store.get_divorce_cd(100, 1) == 999999.0
+    assert store.get_divorce_cd(100, 2) is None
+
+
+def test_get_partner_none_when_never_married(tmp_store):
+    from nonebot_plugin_waifu import store
+
+    assert store.get_partner(100, 1) is None
+    assert not store.is_married(100, 1)
+
+
+def test_marriage_scoped_to_group(tmp_store):
+    from nonebot_plugin_waifu import store
+
+    store.marry(group_id=100, a=1, b=2)
+    assert store.get_partner(200, 1) is None

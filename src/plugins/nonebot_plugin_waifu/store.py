@@ -228,16 +228,100 @@ def locked_partners(group_id: int, date_key: str) -> set[int]:
         return {int(r["partner_id"]) for r in rows}
 
 
+def marry(*, group_id: int, a: int, b: int) -> None:
+    """绑定婚姻：**同一事务**写入双向两行。
+
+    为什么存两行而不是一行 + 方向判断：`(group_id, user_id)` 作主键后
+    「查某人的配偶」永远是一行等值查询，调用方不需要知道谁是 a 谁是 b。
+    代价是写入必须原子 —— 少写一行就会出现「A 已婚、B 单身」的脏状态。
+    """
+    now = time.time()
+    with _conn() as conn:
+        for me, other in ((a, b), (b, a)):
+            conn.execute(
+                f"INSERT INTO {_T_MARRIAGE}"
+                " (group_id, user_id, partner_id, status, since)"
+                " VALUES (?, ?, ?, 'married', ?)"
+                " ON CONFLICT (group_id, user_id) DO UPDATE SET"
+                "   partner_id = excluded.partner_id,"
+                "   status = excluded.status,"
+                "   since = excluded.since",
+                (group_id, me, other, now),
+            )
+
+
+def divorce(*, group_id: int, a: int, b: int) -> None:
+    """解除婚姻：同事务删除双向两行（保留冷却由 `set_divorce_cd` 另行负责）。"""
+    with _conn() as conn:
+        conn.execute(
+            f"DELETE FROM {_T_MARRIAGE} WHERE group_id = ? AND user_id IN (?, ?)",
+            (group_id, a, b),
+        )
+
+
+def get_partner(group_id: int, user_id: int) -> int | None:
+    """取配偶 QQ 号；未婚返回 None。"""
+    with _conn() as conn:
+        row = conn.execute(
+            f"SELECT partner_id FROM {_T_MARRIAGE}"
+            " WHERE group_id = ? AND user_id = ? AND status = 'married'",
+            (group_id, user_id),
+        ).fetchone()
+        return int(row["partner_id"]) if row else None
+
+
+def is_married(group_id: int, user_id: int) -> bool:
+    return get_partner(group_id, user_id) is not None
+
+
+def married_ids(group_id: int) -> set[int]:
+    """该群所有已婚者（用来把他们从抽取池里排除）。"""
+    with _conn() as conn:
+        rows = conn.execute(
+            f"SELECT user_id FROM {_T_MARRIAGE}"
+            " WHERE group_id = ? AND status = 'married'",
+            (group_id,),
+        ).fetchall()
+        return {int(r["user_id"]) for r in rows}
+
+
+def set_divorce_cd(*, group_id: int, user_id: int, until: float) -> None:
+    """给**离婚发起方**设冷却截止时刻。"""
+    with _conn() as conn:
+        conn.execute(
+            f"INSERT INTO {_T_CD} (group_id, user_id, until) VALUES (?, ?, ?)"
+            " ON CONFLICT (group_id, user_id) DO UPDATE SET until = excluded.until",
+            (group_id, user_id, until),
+        )
+
+
+def get_divorce_cd(group_id: int, user_id: int) -> float | None:
+    """取冷却截止时刻；没有返回 None。"""
+    with _conn() as conn:
+        row = conn.execute(
+            f"SELECT until FROM {_T_CD} WHERE group_id = ? AND user_id = ?",
+            (group_id, user_id),
+        ).fetchone()
+        return float(row["until"]) if row else None
+
+
 __all__ = [
     "count_members",
     "default_db_path",
+    "divorce",
     "get_daily",
+    "get_divorce_cd",
     "get_member",
+    "get_partner",
     "init",
     "is_initialized",
+    "is_married",
     "list_members",
     "lock_daily",
     "locked_partners",
+    "married_ids",
+    "marry",
     "set_daily",
+    "set_divorce_cd",
     "touch_member",
 ]
