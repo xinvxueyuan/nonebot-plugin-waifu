@@ -302,8 +302,11 @@ async def _do_draw(
     `redraw=True`（换一只）走 `resolve_change_action`，否则走 `resolve_today_action`。
 
     ⚠️ **抽取池不做任何性别筛选**（用户 2026-10-10 口径）：只排除
-    自己 / 今日已锁定者 / 已婚者。性别只在下游渲染时展示 ——
+    自己 / 今日已锁定者 / **今日已抽到过的人** / 已婚者。性别只在下游渲染时展示 ——
     所以这里**没有**「抽中后查性别、不合适就重抽」的循环（那是已删除的死逻辑）。
+
+    排除集 = `locked_partners`（确认锁）**并上** `drawn_partners`（当日抽取历史）——
+    这样同一天内首次抽到的人 + 每次换一只抽到的人都不会再出现（用户 2026-10-11 口径）。
     """
     gid, me = event.group_id, int(event.user_id)
     today = _today()
@@ -369,16 +372,29 @@ async def _do_draw(
         info = await member_info.fetch_member_info(bot, group_id=gid, user_id=uid)
         return str(info["sex"])
 
+    # 已婚者不能再抽
+    married = store.married_ids(gid)
+
+    # 「抽遍了」与「池子本来就没人」要分清：在调用前先算一个**未去重**的可用候选数
+    # （只排除自己 / 已婚者，**不**排除 locked/drawn）。为 0 才是真的没人。
+    # 不为此多加数据库查询 —— 复用已读入的 pool 与上面算出的 married。
+    raw_available = any(c.user_id != me and c.user_id not in married for c in pool)
+
     picked = await _pick_eligible(
         pool=pool,
         me=me,
         my_sex=my_sex,
         mode=mode,
-        excluded=store.locked_partners(gid, me, today),
-        married=store.married_ids(gid),
+        excluded=store.locked_partners(gid, me, today)
+        | store.drawn_partners(gid, me, today),
+        married=married,
         fetch_sex=_fetch_sex,
     )
     if picked is None:
+        # 池子里有人、但今天都被我抽遍了 → 专门的「抽遍了」文案；
+        # 池子本来就空 → 保留原文案（避免误报）。
+        if raw_available:
+            return rules.ALL_DRAWN_MESSAGE
         return "群里还没有能抽的人（要有人发过言才会进池子）"
 
     store.set_daily(group_id=gid, user_id=me, date_key=today, partner_id=picked.user_id)

@@ -27,6 +27,10 @@ QUOTA_MESSAGE: Final[str] = "渣男，你今天没有老婆了！"
 #: 「换一只」在今日已确认后的拒绝文案（用户 2026-10-11 拍板：确认即定死）。
 CONFIRMED_MESSAGE: Final[str] = "你今天已确认老婆，不能再换"
 
+#: 当天群里的人都被我抽过一遍（去重把人都排除了）时的文案。
+#: 与「池子本来就没人」区分开 —— 后者仍用 handle 里那句「群里还没有能抽的人」。
+ALL_DRAWN_MESSAGE: Final[str] = "今天群里的人你已经抽遍了，明天再来"
+
 DEFAULT_TZ: Final[str] = "Asia/Shanghai"
 
 
@@ -193,6 +197,7 @@ def pending_alive(*, requested_at: float, now: float | None = None) -> bool:
 
 
 __all__ = [
+    "ALL_DRAWN_MESSAGE",
     "CONFIRMED_MESSAGE",
     "DEFAULT_TZ",
     "DIVORCE_CD_SECONDS",

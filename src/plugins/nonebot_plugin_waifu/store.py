@@ -38,6 +38,7 @@ _T_MARRIAGE = "waifu_marriage"
 _T_PENDING = "waifu_pending"
 _T_CD = "waifu_divorce_cd"
 _T_LOCK = "waifu_locked"
+_T_DRAWN = "waifu_drawn"
 
 _SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS {_T_MEMBERS} (
@@ -91,6 +92,15 @@ CREATE TABLE IF NOT EXISTS {_T_LOCK} (
     partner_id INTEGER NOT NULL,
     created_at REAL    NOT NULL,
     PRIMARY KEY (group_id, user_id, date_key)
+);
+
+CREATE TABLE IF NOT EXISTS {_T_DRAWN} (
+    group_id   INTEGER NOT NULL,
+    user_id    INTEGER NOT NULL,
+    date_key   TEXT    NOT NULL,
+    partner_id INTEGER NOT NULL,
+    drawn_at   REAL    NOT NULL,
+    PRIMARY KEY (group_id, user_id, date_key, partner_id)
 );
 """
 
@@ -181,7 +191,7 @@ def count_members(group_id: int) -> int:
 
 
 def set_daily(*, group_id: int, user_id: int, date_key: str, partner_id: int) -> None:
-    """写入/更新当日老婆记录。
+    """写入/更新当日老婆记录，**并顺手记一笔当日抽取历史**。
 
     `draws_used` 在**已有记录**时 `+1`（换一只累加计数，用户口径：所有抽都计数）；
     首次写入时置 1（那次抽取本身算一次）。
@@ -190,6 +200,10 @@ def set_daily(*, group_id: int, user_id: int, date_key: str, partner_id: int) ->
     `waifu_locked` 表（键 = 群+用户+日期），抽取排除集只读那张表，所以重抽
     （换一只 / 今日老婆）不会再把「最近一次确认」冲掉。这里的 `locked` 仅作
     「最近一次确认」的镜像，供 `get_daily` 的消费方与测试查看。
+
+    本函数是「成功抽到一个人」的**唯一落库入口**（首次抽取与换一只都走它），
+    所以在这里调用 `record_drawn` 记当日历史 —— 保证**不可能漏写**，
+    从而让「同一天不重复抽到同一人」的排除集总有完整数据。
     """
     now = time.time()
     with _conn() as conn:
@@ -205,6 +219,41 @@ def set_daily(*, group_id: int, user_id: int, date_key: str, partner_id: int) ->
             "   updated_at = excluded.updated_at",
             (group_id, user_id, date_key, partner_id, now),
         )
+    record_drawn(
+        group_id=group_id, user_id=user_id, date_key=date_key, partner_id=partner_id
+    )
+
+
+def record_drawn(
+    *, group_id: int, user_id: int, date_key: str, partner_id: int
+) -> None:
+    """记一笔「我今天抽到过 ta」（幂等）。
+
+    用 `INSERT OR IGNORE`：主键含 `partner_id`，同一天同一个人重复写**不报错**、
+    只留一行（换一只正好抽回同一个人时不会撞主键炸掉整个命令）。
+    """
+    with _conn() as conn:
+        conn.execute(
+            f"INSERT OR IGNORE INTO {_T_DRAWN}"
+            " (group_id, user_id, date_key, partner_id, drawn_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (group_id, user_id, date_key, partner_id, time.time()),
+        )
+
+
+def drawn_partners(group_id: int, user_id: int, date_key: str) -> set[int]:
+    """我今天已经抽到过的人（首次抽取 + 所有换一只的**累积**）。
+
+    带 `user_id` 过滤 —— **只影响我自己**（与 `locked_partners` 一致）：
+    我抽到过 X，别人抽签时 X 仍是候选。跨天自然失效（date_key 变了即为空集）。
+    """
+    with _conn() as conn:
+        rows = conn.execute(
+            f"SELECT partner_id FROM {_T_DRAWN}"
+            " WHERE group_id = ? AND user_id = ? AND date_key = ?",
+            (group_id, user_id, date_key),
+        ).fetchall()
+        return {int(r["partner_id"]) for r in rows}
 
 
 def get_daily(group_id: int, user_id: int, date_key: str) -> sqlite3.Row | None:
@@ -418,6 +467,7 @@ __all__ = [
     "count_members",
     "default_db_path",
     "divorce",
+    "drawn_partners",
     "get_daily",
     "get_divorce_cd",
     "get_member",
@@ -433,6 +483,7 @@ __all__ = [
     "married_ids",
     "marry",
     "purge_pending_before",
+    "record_drawn",
     "set_daily",
     "set_divorce_cd",
     "set_pending",
