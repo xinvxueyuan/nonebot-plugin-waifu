@@ -18,6 +18,7 @@ def test_init_creates_all_tables(tmp_store):
         "waifu_marriage",
         "waifu_pending",
         "waifu_divorce_cd",
+        "waifu_locked",
     } <= names
 
 
@@ -102,14 +103,69 @@ def test_lock_daily_returns_false_without_record(tmp_store):
 
 
 def test_locked_partners_today(tmp_store):
-    """今日所有 locked=1 的 partner 集合（用来从抽取池里移除）。"""
+    """今天**我**确认过的 partner 集合（按 user 隔离，用来从我自己的抽取池里移除）。"""
     from nonebot_plugin_waifu import store
 
     store.set_daily(group_id=100, user_id=1, date_key="2026-10-10", partner_id=2)
     store.set_daily(group_id=100, user_id=3, date_key="2026-10-10", partner_id=4)
-    store.lock_daily(100, 1, "2026-10-10")  # 2 被锁
-    assert store.locked_partners(100, "2026-10-10") == {2}
-    assert store.locked_partners(100, "2026-10-11") == set()
+    store.lock_daily(100, 1, "2026-10-10")  # user 1 锁了 2
+    assert store.locked_partners(100, 1, "2026-10-10") == {2}
+    # user 3 没确认 → 空（锁只对确认者生效）
+    assert store.locked_partners(100, 3, "2026-10-10") == set()
+    # 跨日 → 空（每日恢复）
+    assert store.locked_partners(100, 1, "2026-10-11") == set()
+
+
+def test_confirm_survives_redraw(tmp_store):
+    """**本 bug 的回归守卫**：确认 X 后换一只（重抽到 Y）不能把 X 的锁冲掉。"""
+    from nonebot_plugin_waifu import store
+
+    g, me, day = 100, 1, "2026-10-10"
+    store.set_daily(group_id=g, user_id=me, date_key=day, partner_id=2)
+    assert store.lock_daily(g, me, day) is True
+    # 换一只：重抽到 3 → 旧列 locked 被清零，但 waifu_locked 那一行不动
+    store.set_daily(group_id=g, user_id=me, date_key=day, partner_id=3)
+    assert store.get_daily(g, me, day)["partner_id"] == 3
+    assert store.locked_partners(g, me, day) == {2}, "确认效果被下一次抽取冲掉了"
+
+
+def test_lock_only_affects_me(tmp_store):
+    """锁只对我生效：我确认了 X，别人抽签时 X 仍是候选（不锁对方）。"""
+    from nonebot_plugin_waifu import store
+
+    g, me, other, day = 100, 1, 9, "2026-10-10"
+    store.set_daily(group_id=g, user_id=me, date_key=day, partner_id=2)
+    store.lock_daily(g, me, day)
+    assert store.locked_partners(g, me, day) == {2}
+    assert store.locked_partners(g, other, day) == set(), "锁泄漏给了别人"
+
+
+def test_lock_is_one_per_day(tmp_store):
+    """一天一个：再确认一次是**覆盖**（改为锁新的那位），不是累加。"""
+    from nonebot_plugin_waifu import store
+
+    g, me, day = 100, 1, "2026-10-10"
+    store.set_daily(group_id=g, user_id=me, date_key=day, partner_id=2)
+    store.lock_daily(g, me, day)
+    store.set_daily(group_id=g, user_id=me, date_key=day, partner_id=3)
+    store.lock_daily(g, me, day)  # 再确认一次 → 锁改成 3
+    assert store.locked_partners(g, me, day) == {3}
+
+
+def test_locked_partners_isolated_by_group_and_day(tmp_store):
+    """群隔离 + 跨日恢复。"""
+    from nonebot_plugin_waifu import store
+
+    me = 1
+    store.set_daily(group_id=100, user_id=me, date_key="2026-10-10", partner_id=2)
+    store.lock_daily(100, me, "2026-10-10")
+    store.set_daily(group_id=200, user_id=me, date_key="2026-10-10", partner_id=3)
+    store.lock_daily(200, me, "2026-10-10")
+    # 同一天、同一人、不同群互不影响
+    assert store.locked_partners(100, me, "2026-10-10") == {2}
+    assert store.locked_partners(200, me, "2026-10-10") == {3}
+    # 跨日：昨天的锁不影响今天
+    assert store.locked_partners(100, me, "2026-10-11") == set()
 
 
 def test_daily_is_scoped_by_date(tmp_store):

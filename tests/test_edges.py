@@ -11,7 +11,7 @@ def test_daily_resets_across_days(tmp_store):
 
     store.set_daily(group_id=GROUP, user_id=ME, date_key="2026-10-09", partner_id=OTHER)
     store.lock_daily(GROUP, ME, "2026-10-09")
-    assert store.locked_partners(GROUP, "2026-10-10") == set()
+    assert store.locked_partners(GROUP, ME, "2026-10-10") == set()
     assert store.get_daily(GROUP, ME, "2026-10-10") is None
 
 
@@ -47,7 +47,7 @@ def test_locked_partner_removed_from_own_draw_today(tmp_store):
         me=ME,
         my_sex="unknown",
         mode="all",
-        excluded=store.locked_partners(GROUP, "2026-10-10"),
+        excluded=store.locked_partners(GROUP, ME, "2026-10-10"),
         married=set(),
     )
     assert got is None

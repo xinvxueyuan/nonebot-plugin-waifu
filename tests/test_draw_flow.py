@@ -135,7 +135,7 @@ def test_draw_never_returns_locked_partner():
         me=ME,
         my_sex="unknown",
         mode="all",
-        excluded=store.locked_partners(GROUP, today),
+        excluded=store.locked_partners(GROUP, ME, today),
         married=store.married_ids(GROUP),
     )
     assert got is None
@@ -146,7 +146,7 @@ def test_draw_never_returns_locked_partner():
         me=30003,
         my_sex="unknown",
         mode="all",
-        excluded=store.locked_partners(GROUP, today),
+        excluded=store.locked_partners(GROUP, 30003, today),
         married=store.married_ids(GROUP),
     )
     assert got_other is not None and got_other.user_id in {ME, OTHER}
