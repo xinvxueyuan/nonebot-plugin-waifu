@@ -19,7 +19,9 @@ htmlkit 的 `combined_img_fetcher` 里 `network_img_fetcher` **不带任何自�
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
+import hashlib
 import html as html_mod
 import logging
 from typing import Any, Final
@@ -29,6 +31,21 @@ logger = logging.getLogger("nonebot_plugin_waifu")
 #: 卡片宽度；`MAX_WIDTH` 必须 ≥ 卡片宽 + padding（否则被压扁）。
 CARD_WIDTH: Final[int] = 640
 MAX_WIDTH: Final[int] = 720
+
+#: 头像 CDN 基址与规格 —— **照 lingchu-bot 前端**
+#: `apps/webui/server/qq.ts`（用户点名参照）：
+#:   QQ_AVATAR_BASE = "https://q.qlogo.cn/headimg_dl"
+#:   实际 URL = `${BASE}?dst_uin=${qq}&spec=${spec}&img_type=jpg`
+#: spec 语义：1/2/3→40px，4→140px，5→640px（亦可传 100 等）。
+_AVATAR_BASE: Final[str] = "https://q.qlogo.cn/headimg_dl"
+_AVATAR_SPEC: Final[int] = 640
+
+#: 头像缓存（进程内，key = URL 的 sha256；**只缓存成功**）
+_AVATAR_CACHE: dict[str, str] = {}
+
+#: 下载超时（秒）。**照 lingchu-bot 前端的 8000ms**（`handlers.ts:81`
+#: `AbortSignal.timeout(8000)`）。取不到就占位，不能让命令卡住。
+_AVATAR_TIMEOUT: Final[float] = 8.0
 
 _SEX_LABELS: Final[dict[str, str]] = {
     "male": "男",
@@ -197,13 +214,83 @@ def build_fallback_text(ctx: CardContext, *, footer: str | None = None) -> str:
     return "\n".join(lines)
 
 
+def avatar_url(user_id: int, *, spec: int = _AVATAR_SPEC) -> str:
+    """QQ 头像直链（公共 CDN，无需登录）。签名与命名对齐前端 `getQQAvatarUrl`。"""
+    return f"{_AVATAR_BASE}?dst_uin={int(user_id)}&spec={spec}&img_type=jpg"
+
+
+def to_data_uri(data: bytes, *, mime: str = "image/jpeg") -> str:
+    """把字节转成 data URI。
+
+    ⚠️ `base64` 字样**必须**出现在逗号前的 header 里 —— htmlkit 的
+    `data_scheme_img_fetcher` 靠它判断编码方式。
+    """
+    return f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
+
+
+def _avatar_cache_key(url: str) -> str:
+    return hashlib.sha256(url.encode("utf-8")).hexdigest()
+
+
+async def _download(url: str) -> tuple[bytes, str] | bytes:
+    """下载头像，返回 `(bytes, content_type)`。
+
+    **照 lingchu-bot 前端 `apps/webui/server/handlers.ts` 的做法**（用户点名参照）：
+    服务端自己 fetch 上游 → 透传 body 与 `content-type`，8 秒超时。
+    单独抽成函数是为了让测试能 monkeypatch 它，不必真发网络请求。
+
+    ⚠️ `httpx` 未在本仓显式声明（父任务指示不擅自改 pyproject）。
+    它是 v11 适配器发 HTTP 的常规依赖；缺失时导入抛 ModuleNotFoundError，
+    被 `fetch_avatar_data_uri` 捕获 → 回退占位块。加 ignore 只是让 pyright
+    在当前（未装 httpx 的）本地环境干净。
+    """
+    import httpx  # pyright: ignore[reportMissingImports]
+
+    async with httpx.AsyncClient(timeout=_AVATAR_TIMEOUT) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        ctype = (resp.headers.get("content-type") or "image/jpeg").split(";")[0]
+        return resp.content, ctype.strip() or "image/jpeg"
+
+
+async def fetch_avatar_data_uri(user_id: int) -> str | None:
+    """取头像并转 data URI；**任何失败返回 None**（调用方渲染占位块）。
+
+    - 成功**写缓存**（同一人多次抽取不必反复下载；对齐前端的
+      `cache-control: public, max-age=86400` 思路）。
+    - 失败**不写负缓存** —— 否则一次抖动会让该头像永久缺失。
+
+    `_download` 约定返回 `(bytes, content_type)`；但也容忍**裸 bytes**
+    （老式替身/调用方只给 body），此时 mime 用默认 `image/jpeg`。
+    """
+    url = avatar_url(user_id)
+    key = _avatar_cache_key(url)
+    if key in _AVATAR_CACHE:
+        return _AVATAR_CACHE[key]
+    try:
+        got = await _download(url)
+        data, ctype = got if isinstance(got, tuple) else (got, "image/jpeg")
+    except Exception as e:
+        logger.warning("取头像失败 user=%s: %s: %s", user_id, type(e).__name__, e)
+        return None
+    if not data:
+        logger.warning("取头像得到空 body user=%s（当失败处理）", user_id)
+        return None
+    uri = to_data_uri(data, mime=ctype)
+    _AVATAR_CACHE[key] = uri
+    return uri
+
+
 __all__ = [
     "CARD_WIDTH",
     "MAX_WIDTH",
     "CardContext",
+    "avatar_url",
     "build_fallback_text",
     "build_html",
+    "fetch_avatar_data_uri",
     "format_last_seen",
     "render_card",
     "sex_label",
+    "to_data_uri",
 ]

@@ -80,3 +80,83 @@ def test_format_last_seen_is_stable():
 
     assert render.format_last_seen(None) == "未知"
     assert render.format_last_seen(0.0)  # 不抛即可
+
+
+def test_to_data_uri_builds_correct_header(tmp_path):
+    """`data_scheme_img_fetcher` 要求 header 里有 `base64` 字样，格式必须精确。"""
+    from nonebot_plugin_waifu import render
+
+    uri = render.to_data_uri(b"\x89PNG\r\n", mime="image/png")
+    assert uri.startswith("data:image/png;base64,")
+    assert len(uri.split(",", 1)[1]) > 0
+
+
+def test_avatar_cache_key_is_url_hash():
+    from nonebot_plugin_waifu import render
+
+    url = render.avatar_url(1)
+    k1 = render._avatar_cache_key(url)
+    k2 = render._avatar_cache_key(render.avatar_url(1))
+    k3 = render._avatar_cache_key(render.avatar_url(2))
+    assert k1 == k2 != k3
+
+
+def test_avatar_url_matches_lingchu_frontend_shape():
+    """头像 URL 形态**照 lingchu-bot 前端**（用户点名参照）。
+
+    前端 `apps/webui/server/qq.ts`：
+        QQ_AVATAR_BASE = "https://q.qlogo.cn/headimg_dl"
+        `${BASE}?dst_uin=${qq}&spec=${spec}&img_type=jpg`
+    """
+    from nonebot_plugin_waifu import render
+
+    assert render.avatar_url(12345) == (
+        "https://q.qlogo.cn/headimg_dl?dst_uin=12345&spec=640&img_type=jpg"
+    )
+
+
+def test_fetch_avatar_data_uri_returns_none_on_failure(monkeypatch):
+    """**失败必须返回 None 且不抛** —— htmlkit 取图失败是静默的，我们要显式降级。"""
+    from nonebot_plugin_waifu import render
+
+    async def boom(*_a, **_kw):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(render, "_download", boom)
+    import asyncio
+
+    assert asyncio.run(render.fetch_avatar_data_uri(10001)) is None
+
+
+def test_fetch_avatar_data_uri_success(monkeypatch):
+    from nonebot_plugin_waifu import render
+
+    async def ok(_url):
+        return b"\xff\xd8\xff"
+
+    monkeypatch.setattr(render, "_download", ok)
+    import asyncio
+
+    uri = asyncio.run(render.fetch_avatar_data_uri(10001))
+    assert uri is not None and uri.startswith("data:image/jpeg;base64,")
+
+
+def test_avatar_failure_is_not_negatively_cached(monkeypatch):
+    """**失败不写负缓存** —— 否则一次网络抖动会让该头像永久缺失。"""
+    from nonebot_plugin_waifu import render
+
+    render._AVATAR_CACHE.clear()
+    calls = {"n": 0}
+
+    async def flaky(_url):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("first fails")
+        return b"\xff\xd8\xff"
+
+    monkeypatch.setattr(render, "_download", flaky)
+    import asyncio
+
+    assert asyncio.run(render.fetch_avatar_data_uri(4242)) is None
+    assert asyncio.run(render.fetch_avatar_data_uri(4242)) is not None
+    assert calls["n"] == 2
