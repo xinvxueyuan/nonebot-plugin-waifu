@@ -28,8 +28,10 @@ from nonebot import on_command
 from nonebot.adapters.onebot.v11 import (
     Bot,
     GroupMessageEvent,
+    Message,
     MessageSegment,
 )
+from nonebot.params import CommandArg
 
 from . import member_info, render, rules, store
 from .config import DEFAULT_HEADLINE_TEMPLATE, plugin_config
@@ -387,6 +389,140 @@ async def _do_draw(
     return None
 
 
+@dataclass(frozen=True)
+class MarriageOutcome:
+    """一次「娶老婆/离婚」命令的处理结果。"""
+
+    bound: bool = False
+    error: str = ""
+    message: str = ""
+    partner: int | None = None
+
+
+def _resolve_target(_event: GroupMessageEvent, args: Message) -> int | None:
+    """从命令参数里取 QQ 号：**@某人 或 直接写数字**（用户口径 `@xxx||int`）。
+
+    - `MessageSegment.at` 的 `data["qq"]` 可能是 `"all"`（@全体）→ 返回 None。
+    - 纯文本里的数字也接受（用户明确要求 `int` 等价）。
+    """
+    for seg in args:
+        if seg.type == "at":
+            qq = str(seg.data.get("qq", "")).strip()
+            if qq.isdigit():
+                return int(qq)
+    plain = args.extract_plain_text().strip()
+    if plain.isdigit():
+        return int(plain)
+    return None
+
+
+def apply_marry(
+    *, group_id: int, requester: int, partner: int, now: float
+) -> MarriageOutcome:
+    """处理一次「娶老婆 @partner」。
+
+    语义（用户确认）：**必须双方都对对方发过**才算绑定。
+    - 自己娶老婆自己 → 拒绝。
+    - 任一方已婚 → 拒绝。
+    - 对方已发过给自己的请求且**窗口未过** → 绑定成功并清请求。
+    - 其他情况 → 记录请求，回复「等对方确认」。
+    """
+    if requester == partner:
+        return MarriageOutcome(error="不能和自己娶老婆")
+    my_partner = store.get_partner(group_id, requester)
+    if my_partner is not None:
+        return MarriageOutcome(error=f"你已经有老婆了（{my_partner}），先「离婚」")
+    if store.is_married(group_id, partner):
+        return MarriageOutcome(error=f"{partner} 已经有老婆了")
+
+    reverse = store.get_pending(
+        group_id, requester=partner, partner=requester, kind="marry"
+    )
+    if reverse is not None:
+        ts = float(reverse["requested_at"])
+        if rules.pending_alive(requested_at=ts, now=now):
+            store.marry(group_id=group_id, a=requester, b=partner)
+            store.clear_pending(
+                group_id, requester=partner, partner=requester, kind="marry"
+            )
+            store.clear_pending(
+                group_id, requester=requester, partner=partner, kind="marry"
+            )
+            return MarriageOutcome(bound=True, partner=partner, message="娶老婆成功！")
+        store.clear_pending(
+            group_id, requester=partner, partner=requester, kind="marry"
+        )
+
+    store.set_pending(
+        group_id=group_id,
+        requester=requester,
+        partner=partner,
+        kind="marry",
+        requested_at=now,
+    )
+    minutes = plugin_config.waifu_pending_minutes
+    return MarriageOutcome(
+        partner=partner,
+        message=f"已向 {partner} 求婚，{minutes} 分钟内让 ta 回发「娶老婆 @你」就成",
+    )
+
+
+def apply_divorce(
+    *, group_id: int, requester: int, partner: int, now: float
+) -> MarriageOutcome:
+    """处理一次「离婚 @partner」：同样**需双方互相发**；成功后给**发起方**上 CD。"""
+    if requester == partner:
+        return MarriageOutcome(error="不能和自己离婚")
+    my_partner = store.get_partner(group_id, requester)
+    if my_partner is None:
+        return MarriageOutcome(error="你还没娶老婆")
+    if my_partner != partner:
+        return MarriageOutcome(error=f"你的老婆是 {my_partner}，不是 {partner}")
+
+    reverse = store.get_pending(
+        group_id, requester=partner, partner=requester, kind="divorce"
+    )
+    if reverse is not None:
+        ts = float(reverse["requested_at"])
+        if rules.pending_alive(requested_at=ts, now=now):
+            store.divorce(group_id=group_id, a=requester, b=partner)
+            store.clear_pending(
+                group_id, requester=partner, partner=requester, kind="divorce"
+            )
+            store.clear_pending(
+                group_id, requester=requester, partner=partner, kind="divorce"
+            )
+            days = plugin_config.waifu_divorce_cd_days
+            if days > 0:
+                # **只锁发起方**（用户口径）：第一次发命令的那个人。
+                store.set_divorce_cd(
+                    group_id=group_id,
+                    user_id=requester,
+                    until=now + days * 86400,
+                )
+            return MarriageOutcome(
+                bound=False,
+                partner=partner,
+                message=f"已离婚。发起方 {days} 天内不能再抽老婆",
+            )
+        store.clear_pending(
+            group_id, requester=partner, partner=requester, kind="divorce"
+        )
+
+    store.set_pending(
+        group_id=group_id,
+        requester=requester,
+        partner=partner,
+        kind="divorce",
+        requested_at=now,
+    )
+    minutes = plugin_config.waifu_pending_minutes
+    return MarriageOutcome(
+        partner=partner,
+        message=f"已申请离婚，{minutes} 分钟内让 ta 回发「离婚 @你」就生效",
+    )
+
+
 today_cmd = on_command(
     CMD_TODAY, aliases={"/今日老婆", "抽老婆", "/抽老婆"}, priority=PRIORITY, block=True
 )
@@ -444,6 +580,50 @@ async def _h_confirm(bot: Bot, event: GroupMessageEvent) -> None:
     )
 
 
+@marry_cmd.handle()
+async def _h_marry(
+    bot: Bot, event: GroupMessageEvent, args: Message = CommandArg()
+) -> None:
+    target = _resolve_target(event, args)
+    if target is None:
+        await marry_cmd.finish(
+            MessageSegment.at(event.user_id)
+            + MessageSegment.text("\n用法：娶老婆 @某人（或 娶老婆 QQ号）")
+        )
+    out = apply_marry(
+        group_id=event.group_id,
+        requester=int(event.user_id),
+        partner=target,
+        now=time.time(),
+    )
+    text = out.error or out.message
+    await marry_cmd.finish(
+        MessageSegment.at(event.user_id) + MessageSegment.text(f"\n{text}")
+    )
+
+
+@divorce_cmd.handle()
+async def _h_divorce(
+    bot: Bot, event: GroupMessageEvent, args: Message = CommandArg()
+) -> None:
+    target = _resolve_target(event, args)
+    if target is None:
+        await divorce_cmd.finish(
+            MessageSegment.at(event.user_id)
+            + MessageSegment.text("\n用法：离婚 @某人（或 离婚 QQ号）")
+        )
+    out = apply_divorce(
+        group_id=event.group_id,
+        requester=int(event.user_id),
+        partner=target,
+        now=time.time(),
+    )
+    text = out.error or out.message
+    await divorce_cmd.finish(
+        MessageSegment.at(event.user_id) + MessageSegment.text(f"\n{text}")
+    )
+
+
 __all__ = [
     "CMD_CHANGE",
     "CMD_CONFIRM",
@@ -452,6 +632,9 @@ __all__ = [
     "CMD_NAMES",
     "CMD_TODAY",
     "Action",
+    "MarriageOutcome",
+    "apply_divorce",
+    "apply_marry",
     "change_cmd",
     "confirm_cmd",
     "divorce_cmd",
