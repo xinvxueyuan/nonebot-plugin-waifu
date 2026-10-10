@@ -272,6 +272,20 @@ def locked_partners(group_id: int, user_id: int, date_key: str) -> set[int]:
         return {int(r["partner_id"]) for r in rows}
 
 
+def has_lock(group_id: int, user_id: int, date_key: str) -> bool:
+    """我今天是否已「确认老婆」（= `waifu_locked` 里有行）。
+
+    「换一只」据此判定能否再换（用户 2026-10-11：确认即定死，不再消耗次数）。
+    """
+    with _conn() as conn:
+        row = conn.execute(
+            f"SELECT 1 FROM {_T_LOCK}"
+            " WHERE group_id = ? AND user_id = ? AND date_key = ? LIMIT 1",
+            (group_id, user_id, date_key),
+        ).fetchone()
+        return row is not None
+
+
 def marry(*, group_id: int, a: int, b: int) -> None:
     """绑定婚姻：**同一事务**写入双向两行。
 
@@ -409,6 +423,7 @@ __all__ = [
     "get_member",
     "get_partner",
     "get_pending",
+    "has_lock",
     "init",
     "is_initialized",
     "is_married",

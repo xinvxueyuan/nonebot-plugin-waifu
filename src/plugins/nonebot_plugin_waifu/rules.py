@@ -24,6 +24,9 @@ DIVORCE_CD_SECONDS: Final[int] = 3 * 86400
 #: 配额用尽时的提示文案（**用户逐字指定，不要改字**）。
 QUOTA_MESSAGE: Final[str] = "渣男，你今天没有老婆了！"
 
+#: 「换一只」在今日已确认后的拒绝文案（用户 2026-10-11 拍板：确认即定死）。
+CONFIRMED_MESSAGE: Final[str] = "你今天已确认老婆，不能再换"
+
 DEFAULT_TZ: Final[str] = "Asia/Shanghai"
 
 
@@ -190,6 +193,7 @@ def pending_alive(*, requested_at: float, now: float | None = None) -> bool:
 
 
 __all__ = [
+    "CONFIRMED_MESSAGE",
     "DEFAULT_TZ",
     "DIVORCE_CD_SECONDS",
     "PENDING_WINDOW_SECONDS",

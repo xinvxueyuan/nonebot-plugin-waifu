@@ -4,9 +4,10 @@
 
     今日老婆 / 抽老婆   当天**首次**执行 → 抽取并锁定为「今日老婆」；
                         之后执行 → **只展示**当前老婆（不换人、不消耗次数）。
-    换一只              **这个才是更换词**：每次都重新抽（消耗 1 次配额）。
-    确认老婆            锁定今日老婆；**只锁自己**（不锁对方），效果是「我之后
-                        抽签不会再抽到 ta」；每日恢复。
+    换一只              **这个才是更换词**：每次都重新抽（消耗 1 次配额）；
+                        但**今日已确认后禁止换**（锁定即定死，不消耗次数）。
+    确认老婆            锁定今日老婆，**今天不能再用「换一只」换人**；**只锁自己**
+                        （不锁对方），效果是「我之后抽签不会再抽到 ta」；每日恢复。
     娶老婆 @xxx||int      需**双方互相**发「娶老婆 @对方」；窗口 3 分钟；绑定后双方
                         不再参与他人抽取、也不能再抽群友。
     离婚 @xxx||int      同上；离婚后**发起方**进入 3 天 CD。
@@ -106,8 +107,17 @@ def resolve_change_action(
     daily_limit: int,
     cd_until: float | None,
     now: float,
+    locked_today: bool,
 ) -> Action:
-    """「换一只」该干什么：**永远走抽取**（有记录也要换人），但要过配额/冷却。"""
+    """「换一只」该干什么：**今日已确认则拒绝**，否则永远走抽取（有记录也要换人），但要过配额/冷却。
+
+    判定顺序：**先「已确认」→ 再配额 → 后冷却**（用户 2026-10-11 口径：
+    确认即定死，且不消耗次数 —— 所以拒绝要走「已确认」这一支，压在配额之前）。
+    """
+    if locked_today:
+        return Action(
+            action="deny", reason="confirmed", message=rules.CONFIRMED_MESSAGE
+        )
     used = int(existing["draws_used"]) if existing is not None else 0
     check = rules.can_draw(
         draws_used=used, daily_limit=daily_limit, cd_until=cd_until, now=now
@@ -306,6 +316,7 @@ async def _do_draw(
             daily_limit=plugin_config.waifu_daily_limit,
             cd_until=store.get_divorce_cd(gid, me),
             now=now,
+            locked_today=store.has_lock(gid, me, today),
         )
     else:
         action = resolve_today_action(
@@ -562,7 +573,8 @@ async def _h_confirm(_bot: Bot, event: GroupMessageEvent) -> None:
     键 = (群, 用户, 日期)。效果是「**我在抽签时不会再把 ta 抽给我**」，但
     **别人仍然可能抽到 ta**。
 
-    - 换一只（重抽）**不会**把这次确认冲掉（锁不在 `waifu_daily` 那一行）。
+    - **确认即定死**（用户 2026-10-11）：今天不能再发「换一只」换人
+      （`resolve_change_action` 读 `store.has_lock` → 直接拒绝，不消耗次数）。
     - 一天一个：再确认一次会改为锁定**新的那位**（覆盖，不是累加）。
     - 跨天恢复：明天 date_key 变了，锁自然失效。
     """
@@ -578,7 +590,7 @@ async def _h_confirm(_bot: Bot, event: GroupMessageEvent) -> None:
         MessageSegment.at(event.user_id)
         + MessageSegment.text(
             f"\n已确认 {partner} 为今日老婆，"
-            "你今天不会再抽到 ta（换一只时也会跳过；明天恢复）"
+            "今天不能再换（只锁你自己、不影响别人；明天恢复）"
         )
     )
 

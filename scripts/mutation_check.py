@@ -166,6 +166,12 @@ MUTATIONS = [
         '            " WHERE group_id = ? AND date_key = ? AND locked = 1",\n'
         "            (group_id, date_key),",
     ),
+    (
+        "M19 换一只忽略已确认锁（确认后还能换人）",
+        HANDLE,
+        "            locked_today=store.has_lock(gid, me, today),",
+        "            locked_today=False,",
+    ),
 ]
 
 
