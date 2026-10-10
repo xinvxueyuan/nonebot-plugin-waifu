@@ -144,10 +144,10 @@ MUTATIONS = [
         "    except (KeyError, IndexError, ValueError):\n        raise\n    if False:\n        logger.warning(",
     ),
     (
-        "M16 结果消息里不再 @ 被抽取人（通知机制失效）",
+        "M16 把「@ 被抽取人」加回结果消息（用户已要求关闭此功能）",
         HANDLE,
-        "            message=at_drawer + at_partner + MessageSegment.image(png),",
-        "            message=at_drawer + MessageSegment.image(png),",
+        "            message=MessageSegment.at(event.user_id) + MessageSegment.image(png),",
+        "            message=MessageSegment.at(event.user_id) + MessageSegment.at(partner_id) + MessageSegment.image(png),",
     ),
     (
         "M17 头像失败改成写负缓存（一次抖动永久缺图）",

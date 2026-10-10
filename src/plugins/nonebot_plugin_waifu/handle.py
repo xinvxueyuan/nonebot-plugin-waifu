@@ -134,9 +134,9 @@ async def _build_and_send(
         headline: 卡片首行文案（`_headline()` 生成的成句文案）。
         footer: 卡片底部可选的补充文案（如「今日已用 N/上限 次」）。
 
-    **通知对方的方式就是 `@` 他**（用户 2026-10-10 明确）：
-    结果消息 = `@抽取人` + `@被抽取人` + 卡片图，**没有任何额外文案、不另发消息**。
-    被 @ 到 QQ 会自然给他提示，这就是全部的通知机制。
+    **只 @ 抽取人；被抽中者不再被 @**（用户 2026-10-10 要求关闭此功能）：
+    结果消息 = `@抽取人` + 卡片图，**没有任何额外文案、不另发消息**。
+    被抽中者不再被 @（该功能已按用户要求关闭）。
 
     **发图不带引用段**：QQ 会把带 `reply` 的图片强制折叠成缩略图（实机反馈过）。
     定位成员用 `@` 即可。
@@ -161,21 +161,19 @@ async def _build_and_send(
         avatar_data_uri=await render.fetch_avatar_data_uri(partner_id),
     )
     png = await render.render_card(ctx, footer=footer)
-    # 一条消息里 @ 两个人：抽取人（回执给谁）+ 被抽取人（**这就是「通知」**）。
-    # ⚠️ **不另发消息、不写任何话术** —— 用户 2026-10-10 明确：
-    #    「在发给抽取人的信息中直接艾特被抽取人就行，不需要任何文案」。
-    at_drawer = MessageSegment.at(event.user_id)
-    at_partner = MessageSegment.at(partner_id)
+    # 只 @ 抽取人（回执给谁）；被抽中者不再被 @（用户 2026-10-10 要求关闭此功能）。
+    # ⚠️ **不另发消息、不写任何话术**。
     if png is not None:
         await bot.send_group_msg(
             group_id=event.group_id,
-            message=at_drawer + at_partner + MessageSegment.image(png),
+            message=MessageSegment.at(event.user_id) + MessageSegment.image(png),
         )
     else:
         fallback = render.build_fallback_text(ctx, footer=footer)
         await bot.send_group_msg(
             group_id=event.group_id,
-            message=at_drawer + at_partner + MessageSegment.text("\n" + fallback),
+            message=MessageSegment.at(event.user_id)
+            + MessageSegment.text("\n" + fallback),
         )
 
 
@@ -288,7 +286,7 @@ async def _do_draw(
     """抽一个人并落库。返回错误文案（None = 成功已发送）。
 
     卡片首行由 `_headline()` 现算（它需要被抽中者的昵称，抽之前拿不到）；
-    通知对方靠消息里的 `@`，所以这里**不需要**动作名之类的参数。
+    结果消息只 @ 抽取人（被抽中者不再被 @），所以这里**不需要**动作名之类的参数。
 
     `redraw=True`（换一只）走 `resolve_change_action`，否则走 `resolve_today_action`。
 
