@@ -640,7 +640,14 @@ change_cmd = on_command(
 confirm_cmd = on_command(
     CMD_CONFIRM, aliases={"/确认老婆"}, priority=PRIORITY, block=True
 )
-marry_cmd = on_command(CMD_MARRY, aliases={"/娶老婆"}, priority=PRIORITY, block=True)
+marry_cmd = on_command(
+    CMD_MARRY,
+    # 「结婚」= 「娶老婆」同义词（用户 2026-10-11 拍板；生产实证：发「结婚 @某人」
+    # 原本毫无反应 —— 命令只注册在「娶老婆」上）。**只加这一个词**，离婚不加别名。
+    aliases={"结婚", "/结婚", "/娶老婆"},
+    priority=PRIORITY,
+    block=True,
+)
 divorce_cmd = on_command(CMD_DIVORCE, aliases={"/离婚"}, priority=PRIORITY, block=True)
 
 
