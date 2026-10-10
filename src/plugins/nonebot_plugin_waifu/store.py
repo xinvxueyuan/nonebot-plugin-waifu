@@ -37,6 +37,7 @@ _T_DAILY = "waifu_daily"
 _T_MARRIAGE = "waifu_marriage"
 _T_PENDING = "waifu_pending"
 _T_CD = "waifu_divorce_cd"
+_T_LOCK = "waifu_locked"
 
 _SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS {_T_MEMBERS} (
@@ -81,6 +82,15 @@ CREATE TABLE IF NOT EXISTS {_T_CD} (
     user_id  INTEGER NOT NULL,
     until    REAL    NOT NULL,
     PRIMARY KEY (group_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS {_T_LOCK} (
+    group_id   INTEGER NOT NULL,
+    user_id    INTEGER NOT NULL,
+    date_key   TEXT    NOT NULL,
+    partner_id INTEGER NOT NULL,
+    created_at REAL    NOT NULL,
+    PRIMARY KEY (group_id, user_id, date_key)
 );
 """
 
@@ -175,6 +185,11 @@ def set_daily(*, group_id: int, user_id: int, date_key: str, partner_id: int) ->
 
     `draws_used` 在**已有记录**时 `+1`（换一只累加计数，用户口径：所有抽都计数）；
     首次写入时置 1（那次抽取本身算一次）。
+
+    旧列 `locked` 被重置为 0 —— 这是安全的：确认锁**不在这一行**，而是存在
+    `waifu_locked` 表（键 = 群+用户+日期），抽取排除集只读那张表，所以重抽
+    （换一只 / 今日老婆）不会再把「最近一次确认」冲掉。这里的 `locked` 仅作
+    「最近一次确认」的镜像，供 `get_daily` 的消费方与测试查看。
     """
     now = time.time()
     with _conn() as conn:
@@ -204,26 +219,55 @@ def get_daily(group_id: int, user_id: int, date_key: str) -> sqlite3.Row | None:
 
 
 def lock_daily(group_id: int, user_id: int, date_key: str) -> bool:
-    """把当日记录标记为「已确认」→ True；没有记录 → False。
+    """把**我**当日记录确认掉 → True；没有当日记录 → False（原有语义不变）。
 
-    确认后该 partner 会被 `locked_partners()` 返回，从而**从抽取池里移除**。
+    确认效果写进独立的 `waifu_locked` 表（键 = 群+用户+日期），值 = 我当日
+    `waifu_daily.partner_id`；**同时**继续把 `waifu_daily.locked = 1` 作为
+    「最近一次确认」的镜像（供 `get_daily` 的消费方与既有测试查看）。
+
+    锁绑的是 (群, 用户, 日期) 这一**主体**而不是 `waifu_daily` 那一行，所以
+    换一只时 `set_daily` 清零旧列 `locked` 也不会把确认冲掉。一天只能锁一个：
+    新表主键含 date_key，再确认一次是**覆盖**而不是累加。
     """
     with _conn() as conn:
-        cur = conn.execute(
+        row = conn.execute(
+            f"SELECT partner_id FROM {_T_DAILY}"
+            " WHERE group_id = ? AND user_id = ? AND date_key = ?",
+            (group_id, user_id, date_key),
+        ).fetchone()
+        if row is None:
+            return False
+        partner_id = int(row["partner_id"])
+        now = time.time()
+        conn.execute(
+            f"INSERT INTO {_T_LOCK}"
+            " (group_id, user_id, date_key, partner_id, created_at)"
+            " VALUES (?, ?, ?, ?, ?)"
+            " ON CONFLICT (group_id, user_id, date_key) DO UPDATE SET"
+            "   partner_id = excluded.partner_id,"
+            "   created_at = excluded.created_at",
+            (group_id, user_id, date_key, partner_id, now),
+        )
+        conn.execute(
             f"UPDATE {_T_DAILY} SET locked = 1, updated_at = ?"
             " WHERE group_id = ? AND user_id = ? AND date_key = ?",
-            (time.time(), group_id, user_id, date_key),
+            (now, group_id, user_id, date_key),
         )
-        return cur.rowcount > 0
+        return True
 
 
-def locked_partners(group_id: int, date_key: str) -> set[int]:
-    """当天所有已确认（locked=1）的 partner 的 QQ 号集合。"""
+def locked_partners(group_id: int, user_id: int, date_key: str) -> set[int]:
+    """**我**今天确认过的人（只影响我自己；别人不受影响）。
+
+    读 `waifu_locked` 并带 `user_id` 过滤 —— 这是「锁只对我生效」的关键：
+    我确认了 X，别人抽签时 X 仍是候选。不再用 `waifu_daily.locked` 作排除源
+    （它是全局的，会让别人也抽不到 X）。
+    """
     with _conn() as conn:
         rows = conn.execute(
-            f"SELECT partner_id FROM {_T_DAILY}"
-            " WHERE group_id = ? AND date_key = ? AND locked = 1",
-            (group_id, date_key),
+            f"SELECT partner_id FROM {_T_LOCK}"
+            " WHERE group_id = ? AND user_id = ? AND date_key = ?",
+            (group_id, user_id, date_key),
         ).fetchall()
         return {int(r["partner_id"]) for r in rows}
 

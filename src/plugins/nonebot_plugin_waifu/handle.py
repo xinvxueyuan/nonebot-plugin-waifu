@@ -363,7 +363,7 @@ async def _do_draw(
         me=me,
         my_sex=my_sex,
         mode=mode,
-        excluded=store.locked_partners(gid, today),
+        excluded=store.locked_partners(gid, me, today),
         married=store.married_ids(gid),
         fetch_sex=_fetch_sex,
     )
@@ -558,9 +558,13 @@ async def _h_change(bot: Bot, event: GroupMessageEvent) -> None:
 async def _h_confirm(_bot: Bot, event: GroupMessageEvent) -> None:
     """确认今天的抽取结果。
 
-    ⚠️ **不锁对方**（用户 2026-10-10 明确）：只给发起方自己的当日记录打
-    `locked=1`。效果是「**我在抽签时不会再把 ta 抽给我**」（因为
-    `locked_partners()` 会排除它），但**别人仍然可能抽到 ta**。
+    ⚠️ **只锁自己**（用户 2026-10-10 明确）：锁存在独立的 `waifu_locked` 表，
+    键 = (群, 用户, 日期)。效果是「**我在抽签时不会再把 ta 抽给我**」，但
+    **别人仍然可能抽到 ta**。
+
+    - 换一只（重抽）**不会**把这次确认冲掉（锁不在 `waifu_daily` 那一行）。
+    - 一天一个：再确认一次会改为锁定**新的那位**（覆盖，不是累加）。
+    - 跨天恢复：明天 date_key 变了，锁自然失效。
     """
     gid, me, today = event.group_id, int(event.user_id), _today()
     if not store.lock_daily(gid, me, today):

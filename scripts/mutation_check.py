@@ -18,6 +18,7 @@ HANDLE = ROOT / "src/plugins/nonebot_plugin_waifu/handle.py"
 PKG = ROOT / "src/plugins/nonebot_plugin_waifu/__init__.py"
 RULES = ROOT / "src/plugins/nonebot_plugin_waifu/rules.py"
 RENDER = ROOT / "src/plugins/nonebot_plugin_waifu/render.py"
+STORE = ROOT / "src/plugins/nonebot_plugin_waifu/store.py"
 
 # ⚠️ 不要加 `--no-cov`（本仓未装 pytest-cov，会报 unrecognized arguments）
 TESTS = ["tests/", "-q", "-p", "no:cacheprovider", "-x"]
@@ -154,6 +155,16 @@ MUTATIONS = [
         RENDER,
         '        logger.warning("取头像失败 user=%s: %s: %s", user_id, type(e).__name__, e)\n        return None',
         '        _AVATAR_CACHE[key] = ""\n        return None',
+    ),
+    (
+        "M18 确认锁改回读 waifu_daily.locked（重抽会冲掉、且全局泄漏给他人）",
+        STORE,
+        '            f"SELECT partner_id FROM {_T_LOCK}"\n'
+        '            " WHERE group_id = ? AND user_id = ? AND date_key = ?",\n'
+        "            (group_id, user_id, date_key),",
+        '            f"SELECT partner_id FROM {_T_DAILY}"\n'
+        '            " WHERE group_id = ? AND date_key = ? AND locked = 1",\n'
+        "            (group_id, date_key),",
     ),
 ]
 
