@@ -27,12 +27,36 @@ def test_build_html_escapes_user_input():
 
 
 def test_build_html_contains_all_required_fields():
-    """用户要求的字段一个都不能少。"""
+    """用户要求的字段一个都不能少（与 QQ号 重复的 @ 列已按用户要求删除）。"""
     from nonebot_plugin_waifu import render
 
     html = render.build_html(_ctx())
-    for needle in ("今日老婆", "@某人", "10001", "甲", "female", "2026-10-10 03:20"):
+    for needle in ("今日老婆", "10001", "甲", "female", "2026-10-10 03:20"):
         assert needle in html, f"缺少字段：{needle}"
+
+
+def test_build_html_drops_redundant_mention_column():
+    """**@ 列与 QQ号 列值相同 → 按用户要求删掉 @ 列**（2026-10-10）。
+
+    - `@：` 整行（及 `{mention}` 占位符渲染出的值）不得再出现；
+    - `QQ号：` 行必须保留。
+    """
+    from nonebot_plugin_waifu import render
+
+    html = render.build_html(_ctx())
+    assert "@：" not in html
+    assert "@某人" not in html  # mention 的值也不再出现
+    assert "QQ号：" in html
+    assert "10001" in html
+
+
+def test_build_fallback_text_drops_redundant_mention_line():
+    """纯文本回退的字段与图一致：同样去掉重复的 @ 行（QQ号 行在）。"""
+    from nonebot_plugin_waifu import render
+
+    text = render.build_fallback_text(_ctx())
+    assert "@某人" not in text
+    assert "QQ号：10001" in text
 
 
 def test_build_html_embeds_avatar_as_data_uri():

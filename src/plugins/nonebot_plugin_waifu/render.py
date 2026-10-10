@@ -97,8 +97,6 @@ _TEMPLATE: Final[str] = """<!DOCTYPE html>
     <span class="line"><span class="key">昵称：</span>
       <span class="val">{nickname}</span></span>
   </div>
-  <div class="line"><span class="key">@：</span>
-    <span class="val">{mention}</span></div>
   <div class="line"><span class="key">QQ号：</span>
     <span class="val">{user_id}</span></div>
   <div class="line"><span class="key">性别：</span>
@@ -172,7 +170,6 @@ def build_html(ctx: CardContext, *, footer: str | None = None) -> str:
         css=_CSS,
         title=html_mod.escape(ctx.title),
         avatar=avatar,
-        mention=html_mod.escape(ctx.mention),
         user_id=ctx.user_id,
         nickname=html_mod.escape(ctx.nickname),
         sex=html_mod.escape(sex_label(ctx.sex)),
@@ -203,7 +200,6 @@ def build_fallback_text(ctx: CardContext, *, footer: str | None = None) -> str:
     """渲染不可用时的纯文本等价物（**字段与图一致**）。"""
     lines = [
         ctx.title,
-        f"@{ctx.mention}",
         f"QQ号：{ctx.user_id}",
         f"昵称：{ctx.nickname}",
         f"性别：{sex_label(ctx.sex)}",
