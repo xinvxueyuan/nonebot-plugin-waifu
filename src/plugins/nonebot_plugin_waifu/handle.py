@@ -556,7 +556,7 @@ async def _h_change(bot: Bot, event: GroupMessageEvent) -> None:
 
 
 @confirm_cmd.handle()
-async def _h_confirm(bot: Bot, event: GroupMessageEvent) -> None:
+async def _h_confirm(_bot: Bot, event: GroupMessageEvent) -> None:
     """确认今天的抽取结果。
 
     ⚠️ **不锁对方**（用户 2026-10-10 明确）：只给发起方自己的当日记录打
@@ -582,7 +582,7 @@ async def _h_confirm(bot: Bot, event: GroupMessageEvent) -> None:
 
 @marry_cmd.handle()
 async def _h_marry(
-    bot: Bot, event: GroupMessageEvent, args: Message = CommandArg()
+    _bot: Bot, event: GroupMessageEvent, args: Message = CommandArg()
 ) -> None:
     target = _resolve_target(event, args)
     if target is None:
@@ -604,7 +604,7 @@ async def _h_marry(
 
 @divorce_cmd.handle()
 async def _h_divorce(
-    bot: Bot, event: GroupMessageEvent, args: Message = CommandArg()
+    _bot: Bot, event: GroupMessageEvent, args: Message = CommandArg()
 ) -> None:
     target = _resolve_target(event, args)
     if target is None:
