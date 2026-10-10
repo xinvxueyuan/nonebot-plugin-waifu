@@ -26,7 +26,7 @@
 - 取向三档（`WAIFU_ORIENTATION`）：`normal` 只抽异性 / `all` 不限（默认）/ `reverse` 只抽同性；
   支持中文写法；性别隐藏或查不到的人一律判为通过。
 - 结果卡片（可选 `nonebot-plugin-htmlkit`）：首行成句文案（`WAIFU_HEADLINE_TEMPLATE`
-  可用 `{drawer}` / `{partner}` / `{user_id}` 三个占位符），正文含 @、QQ号、昵称、头像、
+  可用 `{drawer}` / `{partner}` / `{user_id}` 三个占位符），正文含 QQ号、昵称、头像、
   性别、最后发言时间；头像走公共 CDN 并在插件侧转 base64 内联。
 - 配额显示：卡片上显示「今日已用 N/上限 次」（`WAIFU_SHOW_QUOTA_IN_CARD`）。
 - 容灾：状态全部落 sqlite（stdlib `sqlite3`），启动时重放并清理过期的待确认请求。
