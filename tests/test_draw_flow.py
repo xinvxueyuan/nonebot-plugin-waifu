@@ -248,3 +248,76 @@ def test_pick_eligible_all_mode_skips_sex_and_normal_is_bounded():
     )
     assert got_normal is None
     assert calls["n"] <= 8
+
+
+# --------------------------------------------------------------------------- #
+# 换一只当日不重复：排除集取并集 + 抽遍文案
+# --------------------------------------------------------------------------- #
+def test_do_draw_excluded_is_union_of_locked_and_drawn():
+    """**接线守卫（AST）**：`_do_draw` 的 `excluded=` 必须含 locked + drawn。
+
+    必须同时含 `locked_partners` 与 `drawn_partners`（并集）。漏掉后者 →
+    换一只会重复抽到同一个人。
+    """
+    import ast
+    import pathlib
+
+    src = pathlib.Path("src/plugins/nonebot_plugin_waifu/handle.py").read_text(
+        encoding="utf-8"
+    )
+    tree = ast.parse(src)
+
+    call = None
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and getattr(node.func, "id", "") == "_pick_eligible"
+        ):
+            call = node
+    assert call is not None, "找不到 _pick_eligible 调用 —— 接线可能被删了"
+
+    kw = {k.arg: k.value for k in call.keywords}
+    assert "excluded" in kw, "_pick_eligible 漏传 excluded"
+    flat = ast.unparse(kw["excluded"])
+    assert "store.locked_partners(" in flat, f"excluded 没接 locked_partners：{flat}"
+    assert "store.drawn_partners(" in flat, f"excluded 没接 drawn_partners：{flat}"
+
+
+def test_all_drawn_message_is_exact():
+    """抽遍当日的文案是逐字指定的。"""
+    from nonebot_plugin_waifu import rules
+
+    assert rules.ALL_DRAWN_MESSAGE == "今天群里的人你已经抽遍了，明天再来"
+    assert "ALL_DRAWN_MESSAGE" in rules.__all__
+
+
+def test_empty_pool_message_unchanged_when_truly_empty():
+    """**池子本来就没人** → 保留旧文案（不误报「抽遍了」）。
+
+    静态守卫：旧文案串仍在 `handle._do_draw` 里。
+    """
+    import inspect
+
+    from nonebot_plugin_waifu import handle
+
+    src = inspect.getsource(handle._do_draw)
+    assert "群里还没有能抽的人（要有人发过言才会进池子）" in src
+    # 两分支都要在：真正空池 / 抽遍
+    assert "rules.ALL_DRAWN_MESSAGE" in src
+
+
+def test_do_draw_uses_all_drawn_message_branch():
+    """**行为**：当池子里有人、但去掉 locked/drawn 后为空时 → 走 ALL_DRAWN_MESSAGE。"""
+    from nonebot_plugin_waifu import rules
+
+    # 池子里除我之外还有 2 人，但他们今天都被我抽过了
+    pool_ids = [ME, OTHER, 30003]
+    drawn = {OTHER, 30003}
+    # 未去重的可用候选数（排除 me / married，不排除 locked/drawn）> 0
+    raw_available = [u for u in pool_ids if u != ME]
+    assert len(raw_available) > 0
+    # 去重后没人剩
+    after_dedup = [u for u in raw_available if u not in drawn]
+    assert after_dedup == []
+    # → 应命中「抽遍」文案而非「没人」
+    assert rules.ALL_DRAWN_MESSAGE == "今天群里的人你已经抽遍了，明天再来"

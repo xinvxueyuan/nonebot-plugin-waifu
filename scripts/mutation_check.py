@@ -172,6 +172,13 @@ MUTATIONS = [
         "            locked_today=store.has_lock(gid, me, today),",
         "            locked_today=False,",
     ),
+    (
+        "M20 换一只忽略当日已抽历史（会重复抽到同一个人）",
+        HANDLE,
+        "        excluded=store.locked_partners(gid, me, today)\n"
+        "        | store.drawn_partners(gid, me, today),",
+        "        excluded=store.locked_partners(gid, me, today),",
+    ),
 ]
 
 

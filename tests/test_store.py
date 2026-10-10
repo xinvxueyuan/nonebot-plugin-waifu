@@ -19,6 +19,7 @@ def test_init_creates_all_tables(tmp_store):
         "waifu_pending",
         "waifu_divorce_cd",
         "waifu_locked",
+        "waifu_drawn",
     } <= names
 
 
@@ -325,3 +326,84 @@ def test_purge_stale_pending(tmp_store):
     removed = store.purge_pending_before(now=1000.0, window=180)
     assert removed == 1
     assert store.get_pending(100, requester=3, partner=4, kind="marry") is not None
+
+
+# --------------------------------------------------------------------------- #
+# 当日抽取历史（waifu_drawn）：换一只不再重复抽到同一人
+# --------------------------------------------------------------------------- #
+def test_record_drawn_is_idempotent(tmp_store):
+    """**幂等**：同一天同一人写两次 → 表里只有 1 行（`INSERT OR IGNORE`）。"""
+    from nonebot_plugin_waifu import store
+
+    g, me, day = 100, 1, "2026-10-11"
+    store.record_drawn(group_id=g, user_id=me, date_key=day, partner_id=2)
+    store.record_drawn(group_id=g, user_id=me, date_key=day, partner_id=2)
+
+    conn = sqlite3.connect(tmp_store)
+    n = conn.execute(
+        "SELECT COUNT(*) FROM waifu_drawn"
+        " WHERE group_id = ? AND user_id = ? AND date_key = ?",
+        (g, me, day),
+    ).fetchone()[0]
+    conn.close()
+    assert n == 1, "同一人同一天写两次应当只留 1 行（主键含 partner_id）"
+
+
+def test_drawn_partners_basic_roundtrip(tmp_store):
+    """基本读/写：抽过谁就记谁。"""
+    from nonebot_plugin_waifu import store
+
+    g, me, day = 100, 1, "2026-10-11"
+    assert store.drawn_partners(g, me, day) == set()
+    store.record_drawn(group_id=g, user_id=me, date_key=day, partner_id=2)
+    assert store.drawn_partners(g, me, day) == {2}
+
+
+def test_drawn_partners_accumulates(tmp_store):
+    """**核心回归**：多次抽取**累积**（首次 + 每次换一只都计入）。"""
+    from nonebot_plugin_waifu import store
+
+    g, me, day = 100, 1, "2026-10-11"
+    store.record_drawn(group_id=g, user_id=me, date_key=day, partner_id=2)
+    store.record_drawn(group_id=g, user_id=me, date_key=day, partner_id=3)
+    store.record_drawn(group_id=g, user_id=me, date_key=day, partner_id=4)
+    assert store.drawn_partners(g, me, day) == {2, 3, 4}
+
+
+def test_drawn_partners_isolated_by_user(tmp_store):
+    """**按用户隔离**：A 抽过的人不出现在 B 的名单里。"""
+    from nonebot_plugin_waifu import store
+
+    g, a, b, day = 100, 1, 9, "2026-10-11"
+    store.record_drawn(group_id=g, user_id=a, date_key=day, partner_id=2)
+    assert store.drawn_partners(g, a, day) == {2}
+    assert store.drawn_partners(g, b, day) == set(), "抽取历史泄漏给了别人"
+
+
+def test_drawn_partners_isolated_by_group_and_day(tmp_store):
+    """**按群隔离 + 跨日为空**（每日恢复）。"""
+    from nonebot_plugin_waifu import store
+
+    me = 1
+    store.record_drawn(group_id=100, user_id=me, date_key="2026-10-11", partner_id=2)
+    store.record_drawn(group_id=200, user_id=me, date_key="2026-10-11", partner_id=3)
+    assert store.drawn_partners(100, me, "2026-10-11") == {2}
+    assert store.drawn_partners(200, me, "2026-10-11") == {3}
+    # 跨日：昨天抽过的人不影响今天
+    assert store.drawn_partners(100, me, "2026-10-12") == set()
+
+
+def test_set_daily_records_drawn(tmp_store):
+    """**写入口唯一**：`set_daily`（首次与换一只都走它）会顺手记历史。
+
+    防止以后有人在别处重写写入逻辑、漏掉 `record_drawn` 而换一只又重复抽到人。
+    """
+    from nonebot_plugin_waifu import store
+
+    g, me, day = 100, 1, "2026-10-11"
+    store.set_daily(group_id=g, user_id=me, date_key=day, partner_id=7)
+    # 换一只：重抽到 8
+    store.set_daily(group_id=g, user_id=me, date_key=day, partner_id=8)
+    assert store.drawn_partners(g, me, day) == {7, 8}
+    # 记录历史**不改变**配额语义：仍旧累加 2 次
+    assert store.get_daily(g, me, day)["draws_used"] == 2
