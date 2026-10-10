@@ -239,12 +239,13 @@ async def _download(url: str) -> tuple[bytes, str] | bytes:
     服务端自己 fetch 上游 → 透传 body 与 `content-type`，8 秒超时。
     单独抽成函数是为了让测试能 monkeypatch 它，不必真发网络请求。
 
-    ⚠️ `httpx` 未在本仓显式声明（父任务指示不擅自改 pyproject）。
-    它是 v11 适配器发 HTTP 的常规依赖；缺失时导入抛 ModuleNotFoundError，
-    被 `fetch_avatar_data_uri` 捕获 → 回退占位块。加 ignore 只是让 pyright
-    在当前（未装 httpx 的）本地环境干净。
+    ⚠️ `httpx` 必须**显式声明**在 `pyproject.toml` 的 `[project] dependencies` 里：
+    它**不是** nonebot2 的传递依赖（实测 nonebot2 把 httpx 放在 `extra == "httpx"`
+    下，onebot 适配器只依赖 msgpack/nonebot2/pydantic/typing-extensions）。缺了它，
+    干净克隆 `uv sync` 后 `import httpx` 会抛 ModuleNotFoundError，被
+    `fetch_avatar_data_uri` 捕获 → 头像**静默降级成占位块**（只一行 warning）。
     """
-    import httpx  # pyright: ignore[reportMissingImports]
+    import httpx
 
     async with httpx.AsyncClient(timeout=_AVATAR_TIMEOUT) as client:
         resp = await client.get(url)

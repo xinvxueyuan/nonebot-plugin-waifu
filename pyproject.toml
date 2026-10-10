@@ -28,6 +28,8 @@ dependencies = [
     # 找不到系统时区库会抛 ZoneInfoNotFoundError，而 date_key 会退回 UTC
     # → 跨天判定整体差 8 小时，且 test_date_key_uses_configured_timezone 会红。
     "tzdata>=2025.1",
+    # 不是 nonebot 的传递依赖；头像下载要用，必须显式声明
+    "httpx>=0.26.0,<1.0.0",
 ]
 
 [project.optional-dependencies]
