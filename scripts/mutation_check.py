@@ -111,8 +111,18 @@ MUTATIONS = [
     (
         "M10 娶老婆不做双向确认（单方即可绑定）",
         HANDLE,
-        '    reverse = store.get_pending(\n        group_id, requester=partner, partner=requester, kind="marry"\n    )\n    if reverse is not None:\n        ts = float(reverse["requested_at"])\n        if rules.pending_alive(requested_at=ts, now=now):',
-        '    reverse = store.get_pending(\n        group_id, requester=partner, partner=requester, kind="marry"\n    )\n    if True:\n        ts = 0.0\n        if True:',
+        '        reverse = store.get_pending(\n'
+        '            group_id, requester=t, partner=requester, kind="marry"\n'
+        '        )\n'
+        '        if reverse is not None:\n'
+        '            ts = float(reverse["requested_at"])\n'
+        '            if rules.pending_alive(requested_at=ts, now=now):',
+        '        reverse = store.get_pending(\n'
+        '            group_id, requester=t, partner=requester, kind="marry"\n'
+        '        )\n'
+        '        if True:\n'
+        '            ts = 0.0\n'
+        '            if True:',
     ),
     (
         "M11 离婚 CD 给双方而不是只给发起方",
@@ -178,6 +188,12 @@ MUTATIONS = [
         "        excluded=store.locked_partners(gid, me, today)\n"
         "        | store.drawn_partners(gid, me, today),",
         "        excluded=store.locked_partners(gid, me, today),",
+    ),
+    (
+        "M21 娶老婆忽略上限配置（能无限娶）",
+        HANDLE,
+        "    if max_partners > 0:\n        current = store.count_partners(group_id, requester)",
+        "    if False:  # 变异：彻底跳过上限判定\n        current = store.count_partners(group_id, requester)",
     ),
 ]
 

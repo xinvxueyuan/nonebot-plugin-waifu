@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import re
 import time
 from typing import TYPE_CHECKING, Final, Literal
 
@@ -423,87 +424,150 @@ class MarriageOutcome:
     error: str = ""
     message: str = ""
     partner: int | None = None
+    partners: tuple[int, ...] = ()
 
 
-def _resolve_target(_event: GroupMessageEvent, args: Message) -> int | None:
-    """从命令参数里取 QQ 号：**@某人 或 直接写数字**（用户口径 `@xxx||int`）。
+def _resolve_target(_event: GroupMessageEvent, args: Message) -> list[int]:
+    """从命令参数里取**全部** QQ 号：`@某人`（可多个）或纯文本数字（空格/逗号分隔）。
 
-    - `MessageSegment.at` 的 `data["qq"]` 可能是 `"all"`（@全体）→ 返回 None。
-    - 纯文本里的数字也接受（用户明确要求 `int` 等价）。
+    - `MessageSegment.at` 的 `data["qq"]` 可能是 `"all"`（@全体）→ **忽略**。
+    - 纯文本里按「非数字字符」切分，接受多个 QQ 号（用户明确要求 `int` 等价）。
+    - **去重、保持出现顺序**；一个都没有时返回**空列表**。
+
+    向后兼容：单个 `@` 或单个数字仍然正常工作（返回单元素列表）。
     """
+    out: list[int] = []
     for seg in args:
-        if seg.type == "at":
-            qq = str(seg.data.get("qq", "")).strip()
-            if qq.isdigit():
-                return int(qq)
-    plain = args.extract_plain_text().strip()
-    if plain.isdigit():
-        return int(plain)
-    return None
+        if seg.type != "at":
+            continue
+        qq = str(seg.data.get("qq", "")).strip()
+        if qq.isdigit():
+            uid = int(qq)
+            if uid not in out:
+                out.append(uid)
+    plain = args.extract_plain_text()
+    for token in re.findall(r"\d+", plain):
+        uid = int(token)
+        if uid not in out:
+            out.append(uid)
+    return out
+
+
+def _format_marry_message(targets: list[int], *, bound: bool) -> str:
+    """按现有风格生成回执文案（多目标逐行列出；超过 5 个截断并说明）。"""
+    minutes = plugin_config.waifu_pending_minutes
+    if bound and len(targets) == 1:
+        return "娶老婆成功！"
+    lines = [
+        f"已向 {t} 求婚，{minutes} 分钟内让 ta 回发「娶老婆 @你」就成" for t in targets
+    ]
+    if len(lines) > 5:
+        extra = len(lines) - 5
+        lines = lines[:5]
+        lines.append(f"……等共 {extra + 5} 人（已省略后续）")
+    return "\n".join(lines)
 
 
 def apply_marry(
-    *, group_id: int, requester: int, partner: int, now: float
+    *,
+    group_id: int,
+    requester: int,
+    partner: int | None = None,
+    partners: list[int] | None = None,
+    now: float,
+    max_partners: int = 1,
 ) -> MarriageOutcome:
-    """处理一次「娶老婆 @partner」。
+    """处理一次「娶老婆」，支持**一次 @ 多人**（贪婪参数）。
 
-    语义（用户确认）：**必须双方都对对方发过**才算绑定。
-    - 自己娶老婆自己 → 拒绝。
-    - 任一方已婚 → 拒绝。
+    语义（用户确认，2026-10-11 支持多配偶）：
+    - 目标 = `partners`（多目标）或 `[partner]`（单目标，向后兼容）。
+    - **各算各的**：每个目标各发一次请求；谁先回发就绑定谁，互不影响。
+    - **上限只查发起方**：`已有效配偶数 + 本次目标数 > max_partners` → **整条拒绝**
+      （全有全无、一行不改）。`max_partners == 0` → **跳过上限判定**（不限）。
+    - 自己 → 从目标里剔除（不能娶自己，不算错误）。
+    - 对方已婚 → 那一人不可娶；若本次只有 ta 则整条拒绝，否则只跳过 ta。
     - 对方已发过给自己的请求且**窗口未过** → 绑定成功并清请求。
-    - 其他情况 → 记录请求，回复「等对方确认」。
+    - 其它 → 记录请求，回「等对方确认」。
     """
-    if requester == partner:
-        return MarriageOutcome(error="不能和自己娶老婆")
-    my_partner = store.get_partner(group_id, requester)
-    if my_partner is not None:
-        return MarriageOutcome(error=f"你已经有老婆了（{my_partner}），先「离婚」")
-    if store.is_married(group_id, partner):
-        return MarriageOutcome(error=f"{partner} 已经有老婆了")
+    targets = list(partners) if partners is not None else ([partner] if partner else [])
+    # 去重 + 剔自己
+    uniq: list[int] = []
+    for t in targets:
+        if t != requester and t not in uniq:
+            uniq.append(t)
 
-    reverse = store.get_pending(
-        group_id, requester=partner, partner=requester, kind="marry"
-    )
-    if reverse is not None:
-        ts = float(reverse["requested_at"])
-        if rules.pending_alive(requested_at=ts, now=now):
-            store.marry(group_id=group_id, a=requester, b=partner)
-            store.clear_pending(
-                group_id, requester=partner, partner=requester, kind="marry"
+    if not uniq:
+        return MarriageOutcome(error="不能和自己娶老婆")
+
+    # 上限判定（只查发起方；0 = 不限）—— **整条拒绝、全有全无**
+    if max_partners > 0:
+        current = store.count_partners(group_id, requester)
+        if current + len(uniq) > max_partners:
+            return MarriageOutcome(
+                error=(
+                    f"你最多只能有 {max_partners} 个老婆"
+                    f"（现在 {current} 个，本次要娶 {len(uniq)} 个），"
+                    "先去「离婚」吧"
+                ),
+                partners=tuple(uniq),
             )
-            store.clear_pending(
-                group_id, requester=requester, partner=partner, kind="marry"
-            )
-            return MarriageOutcome(bound=True, partner=partner, message="娶老婆成功！")
-        store.clear_pending(
-            group_id, requester=partner, partner=requester, kind="marry"
+
+    # 单配（max=1）下保留「对方已婚则拒绝」（多配时对方可以已是别人的第 N 个）
+    if max_partners == 1:
+        for t in uniq:
+            if store.is_married(group_id, t):
+                return MarriageOutcome(error=f"{t} 已经有老婆了", partners=tuple(uniq))
+
+    bound_to: int | None = None
+    for t in uniq:
+        reverse = store.get_pending(
+            group_id, requester=t, partner=requester, kind="marry"
+        )
+        if reverse is not None:
+            ts = float(reverse["requested_at"])
+            if rules.pending_alive(requested_at=ts, now=now):
+                store.marry(group_id=group_id, a=requester, b=t)
+                store.clear_pending(
+                    group_id, requester=t, partner=requester, kind="marry"
+                )
+                store.clear_pending(
+                    group_id, requester=requester, partner=t, kind="marry"
+                )
+                if bound_to is None:
+                    bound_to = t
+                continue
+            store.clear_pending(group_id, requester=t, partner=requester, kind="marry")
+        store.set_pending(
+            group_id=group_id,
+            requester=requester,
+            partner=t,
+            kind="marry",
+            requested_at=now,
         )
 
-    store.set_pending(
-        group_id=group_id,
-        requester=requester,
-        partner=partner,
-        kind="marry",
-        requested_at=now,
-    )
-    minutes = plugin_config.waifu_pending_minutes
+    outcome = len(uniq) == 1 and bound_to is not None
     return MarriageOutcome(
-        partner=partner,
-        message=f"已向 {partner} 求婚，{minutes} 分钟内让 ta 回发「娶老婆 @你」就成",
+        bound=outcome,
+        partner=bound_to or uniq[0],
+        partners=tuple(uniq),
+        message=_format_marry_message(uniq, bound=outcome),
     )
 
 
 def apply_divorce(
     *, group_id: int, requester: int, partner: int, now: float
 ) -> MarriageOutcome:
-    """处理一次「离婚 @partner」：同样**需双方互相发**；成功后给**发起方**上 CD。"""
+    """处理一次「离婚 @partner」：同样**需双方互相发**；成功后给**发起方**上 CD。
+
+    多配偶下：只能离**自己确实娶了的**那一位（`partner` 必须在 `list_partners` 里）。
+    """
     if requester == partner:
         return MarriageOutcome(error="不能和自己离婚")
-    my_partner = store.get_partner(group_id, requester)
-    if my_partner is None:
+    my_partners = store.list_partners(group_id, requester)
+    if not my_partners:
         return MarriageOutcome(error="你还没娶老婆")
-    if my_partner != partner:
-        return MarriageOutcome(error=f"你的老婆是 {my_partner}，不是 {partner}")
+    if partner not in my_partners:
+        return MarriageOutcome(error=f"你的老婆是 {my_partners[0]}，不是 {partner}")
 
     reverse = store.get_pending(
         group_id, requester=partner, partner=requester, kind="divorce"
@@ -615,17 +679,25 @@ async def _h_confirm(_bot: Bot, event: GroupMessageEvent) -> None:
 async def _h_marry(
     _bot: Bot, event: GroupMessageEvent, args: Message = CommandArg()
 ) -> None:
-    target = _resolve_target(event, args)
-    if target is None:
+    """「娶老婆」：**贪婪参数**（可一次 @ 多人），上限只查发起方。
+
+    `args: Message = CommandArg()` 本身就是贪婪的（拿到命令后的全部消息），
+    所以无需改签名 —— 关键是 `_resolve_target` 取**全部** at 段。
+    """
+    targets = _resolve_target(event, args)
+    if not targets:
         await marry_cmd.finish(
             MessageSegment.at(event.user_id)
-            + MessageSegment.text("\n用法：娶老婆 @某人（或 娶老婆 QQ号）")
+            + MessageSegment.text(
+                "\n用法：娶老婆 @某人（可一次 @ 多人，或 娶老婆 QQ号）"
+            )
         )
     out = apply_marry(
         group_id=event.group_id,
         requester=int(event.user_id),
-        partner=target,
+        partners=targets,
         now=time.time(),
+        max_partners=plugin_config.waifu_max_partners,
     )
     text = out.error or out.message
     await marry_cmd.finish(
@@ -637,8 +709,8 @@ async def _h_marry(
 async def _h_divorce(
     _bot: Bot, event: GroupMessageEvent, args: Message = CommandArg()
 ) -> None:
-    target = _resolve_target(event, args)
-    if target is None:
+    targets = _resolve_target(event, args)
+    if not targets:
         await divorce_cmd.finish(
             MessageSegment.at(event.user_id)
             + MessageSegment.text("\n用法：离婚 @某人（或 离婚 QQ号）")
@@ -646,7 +718,7 @@ async def _h_divorce(
     out = apply_divorce(
         group_id=event.group_id,
         requester=int(event.user_id),
-        partner=target,
+        partner=targets[0],
         now=time.time(),
     )
     text = out.error or out.message
