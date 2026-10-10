@@ -1,0 +1,130 @@
+[project]
+name = "nonebot-plugin-waifu"
+version = "0.1.0"
+description = "今日老婆：从群内活跃成员里抽一位当老婆，支持换一只/确认/娶老婆/离婚"
+keywords = ["nonebot2", "nonebot", "bot", "waifu", "marriage", "group-management"]
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "xinvxueyuan", email = "xinvxueyuan@yeah.net" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Plugins",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Natural Language :: Chinese (Simplified)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Communications :: Chat",
+]
+dependencies = [
+    "nonebot2>=2.5.0",
+    "nonebot-adapter-onebot>=2.4.6",
+    "nonebot-plugin-localstore>=0.7.4",
+]
+
+[project.optional-dependencies]
+# 结果图渲染（可选）：装不上/加载失败时 render 返回 None，handle 回退纯文本。
+htmlkit = ["nonebot-plugin-htmlkit==0.1.0rc5"]
+
+[project.urls]
+Homepage = "https://github.com/xinvxueyuan/nonebot-plugin-waifu"
+Repository = "https://github.com/xinvxueyuan/nonebot-plugin-waifu"
+
+[dependency-groups]
+dev = [
+    { include-group = "lint" },
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+]
+lint = [
+    "ruff>=0.16.2",
+    "pyright>=1.1.411",
+]
+
+[tool.nonebot]
+plugin_dirs = ["src/plugins"]
+
+[tool.nonebot.adapters]
+nonebot-adapter-onebot = [
+    { name = "OneBot V11", module_name = "nonebot.adapters.onebot.v11" },
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.format]
+line-ending = "lf"
+preview = true
+
+[tool.ruff.lint]
+preview = true
+explicit-preview-rules = true
+select = [
+    "F", "W", "E", "I", "N", "UP", "ANN", "ASYNC", "BLE", "B", "A", "COM", "C4",
+    "D", "T10", "ICN", "PIE", "T20", "Q", "RET", "SIM", "TID", "TC", "ARG",
+    "PERF", "PGH", "FURB", "TRY", "RUF",
+]
+ignore = [
+    "E402", "B008", "ANN401", "COM812", "TID252",
+    "D100", "D104", "D105", "D107", "D203", "D212", "D400", "D415",
+    "D101", "D102", "D103",
+    "RUF001", "RUF002", "RUF003", "BLE001",
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.pyupgrade]
+keep-runtime-typing = true
+
+[tool.ruff.lint.flake8-quotes]
+inline-quotes = "double"
+multiline-quotes = "double"
+docstring-quotes = "double"
+
+[tool.ruff.lint.isort]
+known-first-party = ["nonebot_plugin_waifu"]
+force-sort-within-sections = true
+combine-as-imports = true
+
+[tool.ruff.lint.per-file-ignores]
+# 测试里刻意用简单写法（替身不写注解、假参数不用到、长文案直接写 raise 里）
+"tests/**" = ["ANN", "ARG", "TRY003"]
+# ⚠️ NoneBot 的 handler/钩子签名注解**必须运行时可解析**（依赖注入靠注解取 Bot/Event）。
+# 把类型挪进 TYPE_CHECKING 会让注入在生产静默失效 —— 所以 TC002 必须放行。
+"src/plugins/nonebot_plugin_waifu/__init__.py" = ["TC002"]
+"src/plugins/nonebot_plugin_waifu/handle.py" = ["TC002"]
+"src/plugins/nonebot_plugin_waifu/render.py" = ["TC002"]
+
+[tool.pyright]
+pythonVersion = "3.10"
+pythonPlatform = "All"
+typeCheckingMode = "strict"
+reportUnknownVariableType = "none"
+reportUnknownMemberType = "none"
+reportUnknownArgumentType = "none"
+reportUnknownLambdaType = "none"
+reportUnknownParameterType = "none"
+reportMissingTypeArgument = "none"
+reportMissingTypeStubs = "none"
+reportUnusedFunction = "none"
+reportPrivateUsage = "none"
+include = ["src"]
+exclude = [".venv", "__pycache__"]
+
+[build-system]
+requires = ["uv_build>=0.11.8,<0.13"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = ["nonebot_plugin_waifu"]
+module-root = "src/plugins"
