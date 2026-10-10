@@ -15,15 +15,24 @@
 `RuntimeError("Cannot detect caller plugin")`。在启动钩子里栈更绕，
 一旦猜不中就会被兜底吞掉，表现成「容灾静默失效」，最难查。
 
-## 表只加不改
+## 表只加不改（唯一例外：`waifu_marriage`）
 
 `init()` 每次都会 `executescript(_SCHEMA)`，全部是 `CREATE TABLE IF NOT EXISTS`：
 新建表是安全的（不动已有数据），但**绝不要**在这里写 DROP / ALTER。
+
+**唯一例外是 `waifu_marriage`**：它需要 `(group_id, user_id, partner_id)` 三列主键
+才能支持「一个人多配偶」，而 `CREATE TABLE IF NOT EXISTS` 不会改动已存在的表。
+所以 `init()` 里额外跑一个**幂等的重建步骤** `_ensure_marriage_schema()`：
+检测现有主键列，若不是三列主键 → **先断言表内行数为 0**（安全护栏）→
+`DROP TABLE` + 按新 schema 重建；**行数不为 0 就绝不重建**，只记一条 warning。
+
+⚠️ 除 `waifu_marriage` 外，其它表**依然只加不改**。
 """
 
 from __future__ import annotations
 
 import contextlib
+import logging
 from pathlib import Path
 import sqlite3
 import time
@@ -31,6 +40,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Generator
+
+logger = logging.getLogger("nonebot_plugin_waifu")
 
 _T_MEMBERS = "waifu_members"
 _T_DAILY = "waifu_daily"
@@ -66,7 +77,7 @@ CREATE TABLE IF NOT EXISTS {_T_MARRIAGE} (
     partner_id INTEGER NOT NULL,
     status     TEXT    NOT NULL,
     since      REAL    NOT NULL,
-    PRIMARY KEY (group_id, user_id)
+    PRIMARY KEY (group_id, user_id, partner_id)
 );
 
 CREATE TABLE IF NOT EXISTS {_T_PENDING} (
@@ -122,6 +133,47 @@ def init(path: Path) -> None:
     _db_path = path
     with _conn() as conn:
         conn.executescript(_SCHEMA)
+        _ensure_marriage_schema(conn)
+
+
+def _ensure_marriage_schema(conn: sqlite3.Connection) -> None:
+    """把旧的 `waifu_marriage`（两列主键）**幂等重建**成三列主键。
+
+    `CREATE TABLE IF NOT EXISTS` 不会改动已存在的表，所以老库升级后仍会停在
+    两列主键（物理上只能存一个配偶）。这里显式检测主键：
+
+    - 已经是 `(group_id, user_id, partner_id)` → 什么都不做（幂等）。
+    - 还是旧主键 → **先断言表内行数为 0**（安全护栏）；
+      - 0 行 → `DROP TABLE` + 按新 schema 重建；
+      - 非 0 行 → **不重建**，记一条 warning（不冒丢数据的风险）。
+
+    ⚠️ 这是本模块**唯一**允许对已有表做 DROP 的地方，且被零行护栏兜住。
+    """
+    rows = conn.execute(f"PRAGMA table_info({_T_MARRIAGE})").fetchall()
+    if not rows:  # 表还不存在：executescript 已按新 schema 建好
+        return
+    pk_cols = tuple(
+        str(r["name"])
+        for r in sorted(rows, key=lambda r: int(r["pk"]))
+        if int(r["pk"]) > 0
+    )
+    if pk_cols == ("group_id", "user_id", "partner_id"):
+        return
+
+    n = int(conn.execute(f"SELECT COUNT(*) AS n FROM {_T_MARRIAGE}").fetchone()["n"])
+    if n != 0:
+        logger.warning(
+            "%s 主键仍是旧的两列 %s 且表内有 %d 行 —— **不重建**"
+            "（重建会有丢数据风险，请先人工清空或迁移）",
+            _T_MARRIAGE,
+            pk_cols,
+            n,
+        )
+        return
+
+    logger.warning("检测到 %s 旧主键 %s 且零行，重建为三列主键", _T_MARRIAGE, pk_cols)
+    conn.execute(f"DROP TABLE {_T_MARRIAGE}")
+    conn.executescript(_SCHEMA)
 
 
 def is_initialized() -> bool:
@@ -336,11 +388,14 @@ def has_lock(group_id: int, user_id: int, date_key: str) -> bool:
 
 
 def marry(*, group_id: int, a: int, b: int) -> None:
-    """绑定婚姻：**同一事务**写入双向两行。
+    """绑定婚姻：**同一事务**写入双向两行（**只处理 a、b 这一对**）。
 
-    为什么存两行而不是一行 + 方向判断：`(group_id, user_id)` 作主键后
-    「查某人的配偶」永远是一行等值查询，调用方不需要知道谁是 a 谁是 b。
+    为什么存两行而不是一行 + 方向判断：主键是 `(group_id, user_id, partner_id)`，
+    「查某人的配偶」是一行等值查询，调用方不需要知道谁是 a 谁是 b。
     代价是写入必须原子 —— 少写一行就会出现「A 已婚、B 单身」的脏状态。
+
+    主键含 `partner_id`（2026-10-11 改为多配偶），所以 `ON CONFLICT` 用三列。
+    这**不会**清掉 a/b 已有的其它配偶行 —— 各对互相独立。
     """
     now = time.time()
     with _conn() as conn:
@@ -349,8 +404,7 @@ def marry(*, group_id: int, a: int, b: int) -> None:
                 f"INSERT INTO {_T_MARRIAGE}"
                 " (group_id, user_id, partner_id, status, since)"
                 " VALUES (?, ?, ?, 'married', ?)"
-                " ON CONFLICT (group_id, user_id) DO UPDATE SET"
-                "   partner_id = excluded.partner_id,"
+                " ON CONFLICT (group_id, user_id, partner_id) DO UPDATE SET"
                 "   status = excluded.status,"
                 "   since = excluded.since",
                 (group_id, me, other, now),
@@ -358,26 +412,64 @@ def marry(*, group_id: int, a: int, b: int) -> None:
 
 
 def divorce(*, group_id: int, a: int, b: int) -> None:
-    """解除婚姻：同事务删除双向两行（保留冷却由 `set_divorce_cd` 另行负责）。"""
+    """解除婚姻：同事务删除**这一对**的双向两行（冷却由 `set_divorce_cd` 另管）。
+
+    ⚠️ 只删 a、b 之间的两行 —— **不能**用 `user_id IN (?, ?)` 删光，
+    否则会把 a 与 b 各自在别处的配偶关系一并抹掉（多配偶下的核心回归）。
+    """
     with _conn() as conn:
         conn.execute(
-            f"DELETE FROM {_T_MARRIAGE} WHERE group_id = ? AND user_id IN (?, ?)",
+            f"DELETE FROM {_T_MARRIAGE}"
+            " WHERE group_id = ? AND user_id = ? AND partner_id = ?",
             (group_id, a, b),
+        )
+        conn.execute(
+            f"DELETE FROM {_T_MARRIAGE}"
+            " WHERE group_id = ? AND user_id = ? AND partner_id = ?",
+            (group_id, b, a),
         )
 
 
+def list_partners(group_id: int, user_id: int) -> list[int]:
+    """某人的全部配偶 QQ 号（按 since 升序，先娶的在前）；未婚返回空列表。"""
+    with _conn() as conn:
+        rows = conn.execute(
+            f"SELECT partner_id FROM {_T_MARRIAGE}"
+            " WHERE group_id = ? AND user_id = ? AND status = 'married'"
+            " ORDER BY since ASC, partner_id ASC",
+            (group_id, user_id),
+        ).fetchall()
+        return [int(r["partner_id"]) for r in rows]
+
+
+def count_partners(group_id: int, user_id: int) -> int:
+    """某人的配偶数量（用于上限判定）。"""
+    with _conn() as conn:
+        row = conn.execute(
+            f"SELECT COUNT(*) AS n FROM {_T_MARRIAGE}"
+            " WHERE group_id = ? AND user_id = ? AND status = 'married'",
+            (group_id, user_id),
+        ).fetchone()
+        return int(row["n"]) if row else 0
+
+
 def get_partner(group_id: int, user_id: int) -> int | None:
-    """取配偶 QQ 号；未婚返回 None。"""
+    """取配偶 QQ 号（**多配偶下返回最先娶的那一个**）；未婚返回 None。
+
+    保留单值语义以兼容既有调用方；需要全部配偶时用 `list_partners`。
+    """
     with _conn() as conn:
         row = conn.execute(
             f"SELECT partner_id FROM {_T_MARRIAGE}"
-            " WHERE group_id = ? AND user_id = ? AND status = 'married'",
+            " WHERE group_id = ? AND user_id = ? AND status = 'married'"
+            " ORDER BY since ASC, partner_id ASC LIMIT 1",
             (group_id, user_id),
         ).fetchone()
         return int(row["partner_id"]) if row else None
 
 
 def is_married(group_id: int, user_id: int) -> bool:
+    """这个人是否已有任何配偶。"""
     return get_partner(group_id, user_id) is not None
 
 
@@ -465,6 +557,7 @@ def purge_pending_before(*, now: float, window: float) -> int:
 __all__ = [
     "clear_pending",
     "count_members",
+    "count_partners",
     "default_db_path",
     "divorce",
     "drawn_partners",
@@ -478,6 +571,7 @@ __all__ = [
     "is_initialized",
     "is_married",
     "list_members",
+    "list_partners",
     "lock_daily",
     "locked_partners",
     "married_ids",
