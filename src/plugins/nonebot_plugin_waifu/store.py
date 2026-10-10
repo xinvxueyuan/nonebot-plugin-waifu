@@ -305,7 +305,58 @@ def get_divorce_cd(group_id: int, user_id: int) -> float | None:
         return float(row["until"]) if row else None
 
 
+def set_pending(
+    *,
+    group_id: int,
+    requester: int,
+    partner: int,
+    kind: str,
+    requested_at: float,
+) -> None:
+    """记下一个待对方确认的娶老婆/离婚请求（**有方向**：A→B 与 B→A 是两条）。"""
+    with _conn() as conn:
+        conn.execute(
+            f"INSERT INTO {_T_PENDING}"
+            " (group_id, requester, partner, kind, requested_at) VALUES (?, ?, ?, ?, ?)"
+            " ON CONFLICT (group_id, kind, requester, partner) DO UPDATE SET"
+            "   requested_at = excluded.requested_at",
+            (group_id, requester, partner, kind, requested_at),
+        )
+
+
+def get_pending(
+    group_id: int, *, requester: int, partner: int, kind: str
+) -> sqlite3.Row | None:
+    """取一条待确认请求；没有返回 None（调用方再用 `rules.pending_alive` 判窗口）。"""
+    with _conn() as conn:
+        return conn.execute(
+            f"SELECT group_id, requester, partner, kind, requested_at FROM {_T_PENDING}"
+            " WHERE group_id = ? AND requester = ? AND partner = ? AND kind = ?",
+            (group_id, requester, partner, kind),
+        ).fetchone()
+
+
+def clear_pending(group_id: int, *, requester: int, partner: int, kind: str) -> None:
+    with _conn() as conn:
+        conn.execute(
+            f"DELETE FROM {_T_PENDING}"
+            " WHERE group_id = ? AND requester = ? AND partner = ? AND kind = ?",
+            (group_id, requester, partner, kind),
+        )
+
+
+def purge_pending_before(*, now: float, window: float) -> int:
+    """删掉窗口已过的请求，返回删除条数（避免表无限增长）。"""
+    cutoff = now - window
+    with _conn() as conn:
+        cur = conn.execute(
+            f"DELETE FROM {_T_PENDING} WHERE requested_at < ?", (cutoff,)
+        )
+        return int(cur.rowcount)
+
+
 __all__ = [
+    "clear_pending",
     "count_members",
     "default_db_path",
     "divorce",
@@ -313,6 +364,7 @@ __all__ = [
     "get_divorce_cd",
     "get_member",
     "get_partner",
+    "get_pending",
     "init",
     "is_initialized",
     "is_married",
@@ -321,7 +373,9 @@ __all__ = [
     "locked_partners",
     "married_ids",
     "marry",
+    "purge_pending_before",
     "set_daily",
     "set_divorce_cd",
+    "set_pending",
     "touch_member",
 ]

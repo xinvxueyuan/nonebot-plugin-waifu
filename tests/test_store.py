@@ -171,3 +171,64 @@ def test_marriage_scoped_to_group(tmp_store):
 
     store.marry(group_id=100, a=1, b=2)
     assert store.get_partner(200, 1) is None
+
+
+def test_pending_roundtrip(tmp_store):
+    from nonebot_plugin_waifu import store
+
+    store.set_pending(
+        group_id=100, requester=1, partner=2, kind="marry", requested_at=100.0
+    )
+    row = store.get_pending(100, requester=1, partner=2, kind="marry")
+    assert row is not None
+    assert row["requested_at"] == 100.0
+
+
+def test_pending_missing_returns_none(tmp_store):
+    from nonebot_plugin_waifu import store
+
+    assert store.get_pending(100, requester=1, partner=2, kind="marry") is None
+
+
+def test_pending_clear(tmp_store):
+    from nonebot_plugin_waifu import store
+
+    store.set_pending(
+        group_id=100, requester=1, partner=2, kind="marry", requested_at=1.0
+    )
+    store.clear_pending(100, requester=1, partner=2, kind="marry")
+    assert store.get_pending(100, requester=1, partner=2, kind="marry") is None
+
+
+def test_pending_kinds_are_independent(tmp_store):
+    from nonebot_plugin_waifu import store
+
+    store.set_pending(
+        group_id=100, requester=1, partner=2, kind="marry", requested_at=1.0
+    )
+    assert store.get_pending(100, requester=1, partner=2, kind="divorce") is None
+
+
+def test_pending_direction_is_directional(tmp_store):
+    """A→B 的请求不等于 B→A 的请求（双方各发一次才算成立）。"""
+    from nonebot_plugin_waifu import store
+
+    store.set_pending(
+        group_id=100, requester=1, partner=2, kind="marry", requested_at=1.0
+    )
+    assert store.get_pending(100, requester=2, partner=1, kind="marry") is None
+
+
+def test_purge_stale_pending(tmp_store):
+    """清理超出窗口的请求（防止表无限增长）。"""
+    from nonebot_plugin_waifu import store
+
+    store.set_pending(
+        group_id=100, requester=1, partner=2, kind="marry", requested_at=1.0
+    )
+    store.set_pending(
+        group_id=100, requester=3, partner=4, kind="marry", requested_at=9e9
+    )
+    removed = store.purge_pending_before(now=1000.0, window=180)
+    assert removed == 1
+    assert store.get_pending(100, requester=3, partner=4, kind="marry") is not None
