@@ -45,6 +45,20 @@ __plugin_meta__ = PluginMetadata(
     type="application",
     homepage="https://github.com/xinvxueyuan/nonebot-plugin-waifu",
     supported_adapters={"nonebot.adapters.onebot.v11"},
+    extra={
+        "menu_type": "群内小游戏",
+        "commands": [
+            {"command": "今日老婆", "desc": "从群友里抽一位今日老婆"},
+            {
+                "command": plugin_config.waifu_change_cmd,
+                "desc": "重新抽一位（不重复、消耗次数）",
+            },
+            {"command": "确认老婆", "desc": "定死今天的（今天不能再换，只锁自己）"},
+            {"command": "娶老婆", "desc": "@某人求婚（可一次 @ 多人），需双方互相发"},
+            {"command": "离婚", "desc": "与已娶的人离婚（发起方 3 天冷却）"},
+        ],
+        "order": 10,
+    },
 )
 
 
