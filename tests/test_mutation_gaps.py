@@ -6,8 +6,8 @@
 - **M14** 渲染失败改成抛出（而非返回 None）—— 没有测试调 `render_card`；
 - **M16** 结果消息里不再 @ 被抽取人 —— 守卫只断言源码里「字符串存在」，
   没断言 `at_partner` 真的拼进 `message`。
-  （**2026-10-10 用户要求关闭「@ 被抽取人」**，M16 随之改写成**防回归守卫**：
-  钉「绝不再 @ 被抽取人」，把加回来当作变异体。）
+  （**2026-10-10 用户要求关闭全部 @**，M16 随之改写成更严的**防回归守卫**：
+  钉「结果消息里绝不允许出现任何 @」，把加回任何 @（抽取人 / 被抽取人）当作变异体。）
 
 三条都**不依赖真 htmlkit**（`render._load_htmlkit` 是单独抽出来可 monkeypatch 的）。
 """
@@ -132,13 +132,13 @@ def test_render_card_passes_png_through_on_success(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# M16：结果消息**只 @ 抽取人**，绝不再 @ 被抽取人（防回归守卫）
+# M16：结果消息**完全不含任何 @**（抽取人 / 被抽取人都不能有）（防回归守卫）
 # --------------------------------------------------------------------------- #
-def test_result_message_ats_only_drawer_never_partner():
-    """**M16（改）**：结果消息只 @ 抽取人，**绝不再 @ 被抽取人**。
+def test_result_message_has_no_at_never_anyone():
+    """**M16（改）**：结果消息里**绝不允许出现任何 `@`**。
 
-    用户 2026-10-10 明确要求关闭「@ 被抽取人」功能 → 本条从「钉 @ 双方」
-    反转为**防回归守卫**：只断言 @ 抽取人 + **不** @ 被抽取人。
+    用户 2026-10-10 要求关闭全部 @ → 本条从「钉 @ 双方」→「钉只 @ 抽取人」
+    再次反转为**更严的防回归守卫**：结果消息里任何 @ 都不允许出现。
 
     只断言「单个字符串存在/不存在」是不够的（会被「只留赋值、不拼进 message」骗过）；
     这里把源码空白全部去掉后匹配整段表达式。
@@ -150,10 +150,11 @@ def test_result_message_ats_only_drawer_never_partner():
     src = inspect.getsource(handle._build_and_send)
     flat = re.sub(r"\s+", "", src)
 
-    # 出图分支：仅 @ 抽取人 + 图，**没有**被抽取人的 at
-    assert "message=MessageSegment.at(event.user_id)+MessageSegment.image(png)" in flat
-    # 回退文本分支：同样仅 @ 抽取人
-    assert "message=MessageSegment.at(event.user_id)+MessageSegment.text(" in flat
-    # ← 防回归：被抽取人不再被 @（任何形态都不允许出现）
+    # 出图分支：纯图，**没有任何 @**
+    assert "message=Message(MessageSegment.image(png))" in flat
+    # 回退文本分支：纯文本，**没有任何 @**，且没有前导换行
+    assert "message=Message(MessageSegment.text(fallback))" in flat
+    # ← 防回归：结果消息里任何形态的 @ 都不允许出现
+    assert "MessageSegment.at" not in flat
+    assert "at_drawer" not in flat
     assert "at_partner" not in flat
-    assert "MessageSegment.at(partner_id)" not in flat

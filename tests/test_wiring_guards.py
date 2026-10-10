@@ -54,10 +54,10 @@ def test_change_command_word_comes_from_config():
     assert 'aliases={f"/{CMD_CHANGE}"}' in src
 
 
-def test_result_message_ats_only_drawer_not_partner():
-    """**只 @ 抽取人；不再 @ 被抽取人**（用户 2026-10-10 要求关闭此功能）。
+def test_result_message_has_no_at_all():
+    """结果消息**不含任何 `@`**（用户 2026-10-10 要求关闭全部 @）。
 
-    结果消息 = `@抽取人` + 卡片图；被抽中者**不再**被 @（该功能已关闭）。
+    结果消息 = 卡片图（渲染不可用时为纯文本）；被抽中者不会收到任何提示。
     仍不允许出现任何额外话术。
     """
     import inspect
@@ -65,9 +65,11 @@ def test_result_message_ats_only_drawer_not_partner():
     from nonebot_plugin_waifu import handle
 
     src = inspect.getsource(handle._build_and_send)
-    assert "MessageSegment.at(event.user_id)" in src
-    # ← 被抽取人不再被 @（防回归：有人把它加回来这条会红）
-    assert "MessageSegment.at(partner_id)" not in src
+    # ← 结果消息里根本不允许出现 at（抽取人 / 被抽取人都不行，防回归）
+    assert "MessageSegment.at" not in src
+    # 纯图分支与纯文本回退分支都还在
+    assert "MessageSegment.image(png)" in src
+    assert "MessageSegment.text(fallback)" in src
     # 那条「你被 X 抽成 Y 了」的话术必须已经不存在
     assert "抽成" not in src
     # 也不该再另发一条通知消息（只允许两处 send_group_msg：出图 / 回退文本）
