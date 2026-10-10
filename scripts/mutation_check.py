@@ -195,6 +195,22 @@ MUTATIONS = [
         "    if max_partners > 0:\n        current = store.count_partners(group_id, requester)",
         "    if False:  # 变异：彻底跳过上限判定\n        current = store.count_partners(group_id, requester)",
     ),
+    (
+        "M22 娶老婆不挡机器人（能娶官方机器人）",
+        HANDLE,
+        "        max_partners=plugin_config.waifu_max_partners,\n"
+        "        robot_qqs=frozenset(\n"
+        "            t\n"
+        "            for t, hit in zip(\n"
+        "                targets,\n"
+        "                await asyncio.gather(*(robot_filter.is_robot(bot, t) for t in targets)),\n"
+        "                strict=False,\n"
+        "            )\n"
+        "            if hit\n"
+        "        ),",
+        "        max_partners=plugin_config.waifu_max_partners,\n"
+        "        robot_qqs=frozenset(),",
+    ),
 ]
 
 

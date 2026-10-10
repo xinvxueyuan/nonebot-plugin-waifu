@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 import logging
 import re
@@ -35,7 +36,7 @@ from nonebot.adapters.onebot.v11 import (
 )
 from nonebot.params import CommandArg
 
-from . import member_info, render, rules, store
+from . import member_info, render, robot_filter, rules, store
 from .config import DEFAULT_HEADLINE_TEMPLATE, plugin_config
 
 if TYPE_CHECKING:
@@ -476,11 +477,16 @@ def apply_marry(
     partners: list[int] | None = None,
     now: float,
     max_partners: int = 1,
+    robot_qqs: frozenset[int] = frozenset(),
 ) -> MarriageOutcome:
     """处理一次「娶老婆」，支持**一次 @ 多人**（贪婪参数）。
 
     语义（用户确认，2026-10-11 支持多配偶）：
     - 目标 = `partners`（多目标）或 `[partner]`（单目标，向后兼容）。
+    - **机器人守卫**（2026-10-11，生产实证）：`robot_qqs` 里的目标一律拒娶，
+      **整条拒绝、全有全无**。为保持本函数是**纯函数、易测**，机器人判定
+      （需 await）由 `_h_marry` 异步算好后传入，这里只做集合判定 ——
+      本函数自身**不 await 任何东西**。
     - **各算各的**：每个目标各发一次请求；谁先回发就绑定谁，互不影响。
     - **上限只查发起方**：`已有效配偶数 + 本次目标数 > max_partners` → **整条拒绝**
       （全有全无、一行不改）。`max_partners == 0` → **跳过上限判定**（不限）。
@@ -498,6 +504,17 @@ def apply_marry(
 
     if not uniq:
         return MarriageOutcome(error="不能和自己娶老婆")
+
+    # 机器人守卫（与「不能娶自己」同一层：目标校验阶段）—— **整条拒绝、全有全无**
+    hit_robots = [t for t in uniq if t in robot_qqs]
+    if hit_robots:
+        shown = hit_robots[:3]
+        more = len(hit_robots) - len(shown)
+        listed = "、".join(str(t) for t in shown) + (f" 等 {more} 个" if more else "")
+        return MarriageOutcome(
+            error=f"不能娶机器人当老婆（{listed}）",
+            partners=tuple(uniq),
+        )
 
     # 上限判定（只查发起方；0 = 不限）—— **整条拒绝、全有全无**
     if max_partners > 0:
@@ -677,12 +694,17 @@ async def _h_confirm(_bot: Bot, event: GroupMessageEvent) -> None:
 
 @marry_cmd.handle()
 async def _h_marry(
-    _bot: Bot, event: GroupMessageEvent, args: Message = CommandArg()
+    bot: Bot, event: GroupMessageEvent, args: Message = CommandArg()
 ) -> None:
     """「娶老婆」：**贪婪参数**（可一次 @ 多人），上限只查发起方。
 
     `args: Message = CommandArg()` 本身就是贪婪的（拿到命令后的全部消息），
     所以无需改签名 —— 关键是 `_resolve_target` 取**全部** at 段。
+
+    **机器人守卫**（2026-10-11，生产实证）：拿到 `targets` 后先**并发**判定哪些
+    是机器人（`robot_filter.is_robot`，含本机器人 `self_id`），再把命中的
+    组成 `frozenset` 传给 `apply_marry(robot_qqs=...)` —— 保持它仍是纯函数。
+    `bot` 形参现在真的被用到了（NoneBot 依赖注入**按注解匹配**，形参名可自由）。
     """
     targets = _resolve_target(event, args)
     if not targets:
@@ -698,6 +720,15 @@ async def _h_marry(
         partners=targets,
         now=time.time(),
         max_partners=plugin_config.waifu_max_partners,
+        robot_qqs=frozenset(
+            t
+            for t, hit in zip(
+                targets,
+                await asyncio.gather(*(robot_filter.is_robot(bot, t) for t in targets)),
+                strict=False,
+            )
+            if hit
+        ),
     )
     text = out.error or out.message
     await marry_cmd.finish(
