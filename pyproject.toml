@@ -108,7 +108,8 @@ combine-as-imports = true
 # ⚠️ NoneBot 的 handler/钩子签名注解**必须运行时可解析**（依赖注入靠注解取 Bot/Event）。
 # 把类型挪进 TYPE_CHECKING 会让注入在生产静默失效 —— 所以 TC002 必须放行。
 "src/plugins/nonebot_plugin_waifu/__init__.py" = ["TC002"]
-"src/plugins/nonebot_plugin_waifu/handle.py" = ["TC002"]
+# ⚠️ NoneBot 的 handler 形参名参与依赖注入，**不能**改成 `_bot`；ARG001 放行。
+"src/plugins/nonebot_plugin_waifu/handle.py" = ["TC002", "ARG001"]
 "src/plugins/nonebot_plugin_waifu/render.py" = ["TC002"]
 
 [tool.pyright]
