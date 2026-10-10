@@ -168,6 +168,43 @@ def test_locked_partners_isolated_by_group_and_day(tmp_store):
     assert store.locked_partners(100, me, "2026-10-11") == set()
 
 
+def test_has_lock_false_without_lock(tmp_store):
+    """没确认过 → False。"""
+    from nonebot_plugin_waifu import store
+
+    assert store.has_lock(100, 1, "2026-10-10") is False
+
+
+def test_has_lock_true_after_lock_daily(tmp_store):
+    """`lock_daily` 后 → True。（确认即定死，用这个判「今天还能不能换」。）"""
+    from nonebot_plugin_waifu import store
+
+    store.set_daily(group_id=100, user_id=1, date_key="2026-10-10", partner_id=2)
+    assert store.has_lock(100, 1, "2026-10-10") is False
+    assert store.lock_daily(100, 1, "2026-10-10") is True
+    assert store.has_lock(100, 1, "2026-10-10") is True
+
+
+def test_has_lock_false_on_other_day(tmp_store):
+    """跨日 → False（每日恢复）。"""
+    from nonebot_plugin_waifu import store
+
+    store.set_daily(group_id=100, user_id=1, date_key="2026-10-10", partner_id=2)
+    store.lock_daily(100, 1, "2026-10-10")
+    assert store.has_lock(100, 1, "2026-10-11") is False
+
+
+def test_has_lock_isolated_by_group(tmp_store):
+    """群隔离：我在 A 群确认了，B 群不算已确认。"""
+    from nonebot_plugin_waifu import store
+
+    me = 1
+    store.set_daily(group_id=100, user_id=me, date_key="2026-10-10", partner_id=2)
+    store.lock_daily(100, me, "2026-10-10")
+    assert store.has_lock(100, me, "2026-10-10") is True
+    assert store.has_lock(200, me, "2026-10-10") is False
+
+
 def test_daily_is_scoped_by_date(tmp_store):
     """跨天：昨天的记录不影响今天（每日恢复）。"""
     from nonebot_plugin_waifu import store

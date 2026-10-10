@@ -84,7 +84,7 @@ def test_today_blocks_on_divorce_cd():
 
 
 def test_change_always_redraws_and_increments():
-    """「换一只」每次换人并计数（即使已有今日老婆）。"""
+    """「换一只」每次换人并计数（即使已有今日老婆；**未确认**时不受影响）。"""
     from nonebot_plugin_waifu import handle, store
 
     today = handle._today()
@@ -94,6 +94,7 @@ def test_change_always_redraws_and_increments():
         daily_limit=20,
         cd_until=None,
         now=1.0,
+        locked_today=False,
     )
     assert got.action == "draw"
 
@@ -110,9 +111,51 @@ def test_change_blocked_at_quota():
         daily_limit=20,
         cd_until=None,
         now=1.0,
+        locked_today=False,
     )
     assert got.action == "deny"
     assert got.message == "渣男，你今天没有老婆了！"
+
+
+def test_change_denied_when_confirmed_today():
+    """**新口径（用户 2026-10-11 拍板）**：确认老婆后「换一只」被拒，不消耗次数。"""
+    from nonebot_plugin_waifu import handle, rules, store
+
+    today = handle._today()
+    store.set_daily(group_id=GROUP, user_id=ME, date_key=today, partner_id=OTHER)
+    store.lock_daily(GROUP, ME, today)
+    got = handle.resolve_change_action(
+        existing=store.get_daily(GROUP, ME, today),
+        daily_limit=20,
+        cd_until=None,
+        now=1.0,
+        locked_today=True,
+    )
+    assert got.action == "deny"
+    assert got.reason == "confirmed"
+    assert got.message == rules.CONFIRMED_MESSAGE
+    assert got.message == "你今天已确认老婆，不能再换"
+
+
+def test_change_confirmed_takes_priority_over_quota():
+    """判定顺序守卫：**「已确认」优先于配额**（配额满时仍回「已确认」而非配额文案）。"""
+    from nonebot_plugin_waifu import handle, rules, store
+
+    today = handle._today()
+    # 配额也用满 20 次 —— locked_today 仍必须抢先返回 confirmed
+    for _ in range(20):
+        store.set_daily(group_id=GROUP, user_id=ME, date_key=today, partner_id=OTHER)
+    store.lock_daily(GROUP, ME, today)
+    got = handle.resolve_change_action(
+        existing=store.get_daily(GROUP, ME, today),
+        daily_limit=20,
+        cd_until=None,
+        now=1.0,
+        locked_today=True,
+    )
+    assert got.action == "deny"
+    assert got.reason == "confirmed", "已确认必须优先于配额（判定顺序被破坏）"
+    assert got.message == rules.CONFIRMED_MESSAGE
 
 
 def test_draw_never_returns_locked_partner():

@@ -115,6 +115,34 @@ def test_confirm_does_not_lock_partner():
     assert "lock_daily(gid, int(row" not in body
 
 
+def test_do_draw_passes_locked_today_to_change():
+    """**接线守卫（2026-10-11 新行为）**：`_do_draw` 必须传 `locked_today=`。
+
+    否则「确认后禁止换一只」在真实路径上静默失效 ——
+    纯函数测试仍全绿，只有把 handler 接线删掉才会露馅。
+    解析 AST 取那次调用的关键字，比字符串匹配稳。
+    """
+    src = pathlib.Path("src/plugins/nonebot_plugin_waifu/handle.py").read_text(
+        encoding="utf-8"
+    )
+    tree = ast.parse(src)
+    call = None
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and getattr(node.func, "id", "") == "resolve_change_action"
+        ):
+            call = node
+    assert call is not None, "找不到 resolve_change_action 调用 —— 接线可能被删了"
+    kw = {k.arg for k in call.keywords}
+    assert "locked_today" in kw, (
+        "resolve_change_action 漏传 locked_today（换一只不再受确认锁约束）"
+    )
+    # 必须真的查 store.has_lock，而不是写死常量
+    flat = ast.unparse(call)
+    assert "store.has_lock(" in flat, f"locked_today 没接到 store.has_lock：{flat}"
+
+
 def test_unknown_gender_always_passes_guard():
     """**用户口径**：「群员隐藏的全部判为通过」。
 
@@ -206,6 +234,28 @@ def test_quota_message_is_exact():
     from nonebot_plugin_waifu import rules
 
     assert rules.QUOTA_MESSAGE == "渣男，你今天没有老婆了！"
+
+
+def test_confirmed_message_is_exact():
+    """「换一只」在已确认后的拒绝文案是用户逐字指定的（2026-10-11）。"""
+    from nonebot_plugin_waifu import rules
+
+    assert rules.CONFIRMED_MESSAGE == "你今天已确认老婆，不能再换"
+
+
+def test_confirm_reply_no_longer_claims_change_skips():
+    """**文案与行为一致**：确认成功文案不再说「换一只时也会跳过」。
+
+    因为确认后根本不能再换（用户 2026-10-11 新口径）。
+    """
+    src = pathlib.Path("src/plugins/nonebot_plugin_waifu/handle.py").read_text(
+        encoding="utf-8"
+    )
+    start = src.index("async def _h_confirm")
+    end = src.index("__all__", start)
+    body = src[start:end]
+    assert "换一只时也会跳过" not in body, "确认文案还写着旧行为（换一只会跳过）"
+    assert "不能再换" in body, "确认文案应说明今天不能再换"
 
 
 def test_pending_window_and_cd_constants():
