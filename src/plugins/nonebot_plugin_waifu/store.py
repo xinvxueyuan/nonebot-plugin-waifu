@@ -170,12 +170,74 @@ def count_members(group_id: int) -> int:
         return int(row["n"]) if row else 0
 
 
+def set_daily(*, group_id: int, user_id: int, date_key: str, partner_id: int) -> None:
+    """写入/更新当日老婆记录。
+
+    `draws_used` 在**已有记录**时 `+1`（换一只累加计数，用户口径：所有抽都计数）；
+    首次写入时置 1（那次抽取本身算一次）。
+    """
+    now = time.time()
+    with _conn() as conn:
+        conn.execute(
+            f"INSERT INTO {_T_DAILY}"
+            " (group_id, user_id, date_key, partner_id, locked, draws_used, updated_at)"
+            " VALUES (?, ?, ?, ?, 0, 1, ?)"
+            " ON CONFLICT (group_id, user_id, date_key) DO UPDATE SET"
+            "   partner_id = excluded.partner_id,"
+            "   locked = 0,"
+            "   draws_used ="
+            f"     {_T_DAILY}.draws_used + 1,"
+            "   updated_at = excluded.updated_at",
+            (group_id, user_id, date_key, partner_id, now),
+        )
+
+
+def get_daily(group_id: int, user_id: int, date_key: str) -> sqlite3.Row | None:
+    """取某人当天记录；没有返回 None（= 今天还没抽过）。"""
+    with _conn() as conn:
+        return conn.execute(
+            f"SELECT group_id, user_id, date_key, partner_id, locked, draws_used,"
+            f" updated_at FROM {_T_DAILY}"
+            " WHERE group_id = ? AND user_id = ? AND date_key = ?",
+            (group_id, user_id, date_key),
+        ).fetchone()
+
+
+def lock_daily(group_id: int, user_id: int, date_key: str) -> bool:
+    """把当日记录标记为「已确认」→ True；没有记录 → False。
+
+    确认后该 partner 会被 `locked_partners()` 返回，从而**从抽取池里移除**。
+    """
+    with _conn() as conn:
+        cur = conn.execute(
+            f"UPDATE {_T_DAILY} SET locked = 1, updated_at = ?"
+            " WHERE group_id = ? AND user_id = ? AND date_key = ?",
+            (time.time(), group_id, user_id, date_key),
+        )
+        return cur.rowcount > 0
+
+
+def locked_partners(group_id: int, date_key: str) -> set[int]:
+    """当天所有已确认（locked=1）的 partner 的 QQ 号集合。"""
+    with _conn() as conn:
+        rows = conn.execute(
+            f"SELECT partner_id FROM {_T_DAILY}"
+            " WHERE group_id = ? AND date_key = ? AND locked = 1",
+            (group_id, date_key),
+        ).fetchall()
+        return {int(r["partner_id"]) for r in rows}
+
+
 __all__ = [
     "count_members",
     "default_db_path",
+    "get_daily",
     "get_member",
     "init",
     "is_initialized",
     "list_members",
+    "lock_daily",
+    "locked_partners",
+    "set_daily",
     "touch_member",
 ]

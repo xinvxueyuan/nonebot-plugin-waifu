@@ -63,3 +63,58 @@ def test_last_seen_advances(tmp_store):
     store.touch_member(group_id=100, user_id=1, nickname="甲")
     second = store.list_members(100)[0]["last_seen"]
     assert second >= first
+
+
+def test_set_and_get_daily(tmp_store):
+    from nonebot_plugin_waifu import store
+
+    store.set_daily(group_id=100, user_id=1, date_key="2026-10-10", partner_id=2)
+    row = store.get_daily(100, 1, "2026-10-10")
+    assert row is not None
+    assert row["partner_id"] == 2
+    assert row["locked"] == 0
+    assert row["draws_used"] == 1  # 首次抽取已计数
+
+
+def test_set_daily_overwrites_partner_and_keeps_counter(tmp_store):
+    """换一只：换人但**累加**计数（不是重置）。"""
+    from nonebot_plugin_waifu import store
+
+    store.set_daily(group_id=100, user_id=1, date_key="2026-10-10", partner_id=2)
+    store.set_daily(group_id=100, user_id=1, date_key="2026-10-10", partner_id=3)
+    row = store.get_daily(100, 1, "2026-10-10")
+    assert row["partner_id"] == 3
+    assert row["draws_used"] == 2
+
+
+def test_lock_daily(tmp_store):
+    from nonebot_plugin_waifu import store
+
+    store.set_daily(group_id=100, user_id=1, date_key="2026-10-10", partner_id=2)
+    assert store.lock_daily(100, 1, "2026-10-10") is True
+    assert store.get_daily(100, 1, "2026-10-10")["locked"] == 1
+
+
+def test_lock_daily_returns_false_without_record(tmp_store):
+    from nonebot_plugin_waifu import store
+
+    assert store.lock_daily(100, 1, "2026-10-10") is False
+
+
+def test_locked_partners_today(tmp_store):
+    """今日所有 locked=1 的 partner 集合（用来从抽取池里移除）。"""
+    from nonebot_plugin_waifu import store
+
+    store.set_daily(group_id=100, user_id=1, date_key="2026-10-10", partner_id=2)
+    store.set_daily(group_id=100, user_id=3, date_key="2026-10-10", partner_id=4)
+    store.lock_daily(100, 1, "2026-10-10")  # 2 被锁
+    assert store.locked_partners(100, "2026-10-10") == {2}
+    assert store.locked_partners(100, "2026-10-11") == set()
+
+
+def test_daily_is_scoped_by_date(tmp_store):
+    """跨天：昨天的记录不影响今天（每日恢复）。"""
+    from nonebot_plugin_waifu import store
+
+    store.set_daily(group_id=100, user_id=1, date_key="2026-10-09", partner_id=2)
+    assert store.get_daily(100, 1, "2026-10-10") is None
