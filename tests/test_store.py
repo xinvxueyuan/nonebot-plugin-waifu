@@ -206,6 +206,20 @@ def test_has_lock_isolated_by_group(tmp_store):
     assert store.has_lock(200, me, "2026-10-10") is False
 
 
+def test_get_locked_partner_returns_confirmed_target(tmp_store):
+    """A3 数据入口：我的「确认对象」；未确认 / 别人的锁 / 跨天 → None。"""
+    from nonebot_plugin_waifu import store
+
+    g, me, other, day = 100, 1, 9, "2026-10-10"
+    assert store.get_locked_partner(g, me, day) is None  # 没确认过
+    store.set_daily(group_id=g, user_id=me, date_key=day, partner_id=2)
+    store.lock_daily(g, me, day)
+    assert store.get_locked_partner(g, me, day) == 2  # 值 = 确认对象
+    assert store.get_locked_partner(g, other, day) is None  # 锁不泄漏给别人
+    assert store.get_locked_partner(g, me, "2026-10-11") is None  # 跨天恢复
+    assert store.get_locked_partner(200, me, day) is None  # 群隔离
+
+
 def test_daily_is_scoped_by_date(tmp_store):
     """跨天：昨天的记录不影响今天（每日恢复）。"""
     from nonebot_plugin_waifu import store

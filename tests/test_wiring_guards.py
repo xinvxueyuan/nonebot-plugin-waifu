@@ -115,32 +115,27 @@ def test_confirm_does_not_lock_partner():
     assert "lock_daily(gid, int(row" not in body
 
 
-def test_do_draw_passes_locked_today_to_change():
-    """**接线守卫（2026-10-11 新行为）**：`_do_draw` 必须传 `locked_today=`。
+def test_do_draw_early_returns_locked_message():
+    """**接线守卫（2026-10-14）**：确认后 `_do_draw` 必须**早退**成「已定人」提示。
 
-    否则「确认后禁止换一只」在真实路径上静默失效 ——
-    纯函数测试仍全绿，只有把 handler 接线删掉才会露馅。
-    解析 AST 取那次调用的关键字，比字符串匹配稳。
+    `store.get_locked_partner(...)` 必须在两个 `resolve_*` 调用**之前**出现；
+    否则会退化成「复用抽取卡片」的老 bug（纯函数仍全绿，只有接线坏了才露馅）。
     """
     src = pathlib.Path("src/plugins/nonebot_plugin_waifu/handle.py").read_text(
         encoding="utf-8"
     )
     tree = ast.parse(src)
-    call = None
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Call)
-            and getattr(node.func, "id", "") == "resolve_change_action"
-        ):
-            call = node
-    assert call is not None, "找不到 resolve_change_action 调用 —— 接线可能被删了"
-    kw = {k.arg for k in call.keywords}
-    assert "locked_today" in kw, (
-        "resolve_change_action 漏传 locked_today（换一只不再受确认锁约束）"
+    fn = next(
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.AsyncFunctionDef) and n.name == "_do_draw"
     )
-    # 必须真的查 store.has_lock，而不是写死常量
-    flat = ast.unparse(call)
-    assert "store.has_lock(" in flat, f"locked_today 没接到 store.has_lock：{flat}"
+    # 跳过 docstring：它按名字提到 `resolve_*`（只是注释性的叙述），
+    # 会变成假锚点 —— 守卫要钉的是**代码里的调用顺序**。
+    body = fn.body[1:] if fn.body and isinstance(fn.body[0], ast.Expr) else fn.body
+    joined = "\n".join(ast.unparse(stmt) for stmt in body)
+    assert "get_locked_partner" in joined and "locked_notice" in joined
+    assert joined.index("get_locked_partner") < joined.index("resolve_today_action")
 
 
 def test_unknown_gender_always_passes_guard():
@@ -234,13 +229,6 @@ def test_quota_message_is_exact():
     from nonebot_plugin_waifu import rules
 
     assert rules.QUOTA_MESSAGE == "渣男，你今天没有老婆了！"
-
-
-def test_confirmed_message_is_exact():
-    """「换一只」在已确认后的拒绝文案是用户逐字指定的（2026-10-11）。"""
-    from nonebot_plugin_waifu import rules
-
-    assert rules.CONFIRMED_MESSAGE == "你今天已确认老婆，不能再换"
 
 
 def test_confirm_reply_no_longer_claims_change_skips():

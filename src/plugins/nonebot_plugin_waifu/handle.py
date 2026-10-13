@@ -36,7 +36,7 @@ from nonebot.adapters.onebot.v11 import (
 )
 from nonebot.params import CommandArg
 
-from . import member_info, render, robot_filter, rules, store
+from . import member_info, notices, render, robot_filter, rules, store
 from .config import DEFAULT_HEADLINE_TEMPLATE, plugin_config
 
 if TYPE_CHECKING:
@@ -103,17 +103,12 @@ def resolve_change_action(
     *,
     existing: sqlite3.Row | None,
     daily_limit: int,
-    locked_today: bool,
 ) -> Action:
-    """「换一只」该干什么：**今日已确认则拒绝**，否则永远走抽取（有记录也要换人），但要过配额。
+    """「换一只」该干什么：永远走抽取（有记录也要换人），但要过配额。
 
-    判定顺序：**先「已确认」→ 再配额**（用户 2026-10-11 口径：
-    确认即定死，且不消耗次数 —— 所以拒绝要走「已确认」这一支，压在配额之前）。
+    ⚠️「今日已确认」的拒绝**不在本函数**：确认过后 `_do_draw` 在算 action
+    **之前**就早退成「已定人」回执（用户 2026-10-14 口径：不再复用抽取卡片）。
     """
-    if locked_today:
-        return Action(
-            action="deny", reason="confirmed", message=rules.CONFIRMED_MESSAGE
-        )
     used = int(existing["draws_used"]) if existing is not None else 0
     check = rules.can_draw(draws_used=used, daily_limit=daily_limit)
     if not check.ok:
@@ -284,8 +279,8 @@ async def _do_draw(
     bot: Bot,
     event: GroupMessageEvent,
     redraw: bool,
-) -> str | None:
-    """抽一个人并落库。返回错误文案（None = 成功已发送）。
+) -> render.NoticeContext | None:
+    """抽一个人并落库。返回**回执**（None = 成功已发送抽取卡片）。
 
     卡片首行由 `_headline()` 现算（它需要被抽中者的昵称，抽之前拿不到）；
     结果消息不含任何 @（用户 2026-10-10 要求关闭全部 @），
@@ -299,16 +294,36 @@ async def _do_draw(
 
     排除集 = `locked_partners`（确认锁）**并上** `drawn_partners`（当日抽取历史）——
     这样同一天内首次抽到的人 + 每次换一只抽到的人都不会再出现（用户 2026-10-11 口径）。
+
+    ⚠️ 返回的都是**回执**（`render.NoticeContext`）：拦下的情况（已定人 / 配额 /
+    已抽遍 / 空池）由 handler 用 `_send_notice` 发**图**，不再有纯文本分支。
     """
     gid, me = event.group_id, int(event.user_id)
     today = _today()
     existing = store.get_daily(gid, me, today)
 
+    # A3（用户 2026-10-14）：确认过之后**早退**成「已定人」回执 ——
+    # 「今日老婆」与「换一只」共用，**不再复用抽取卡片**。
+    # 必须在两个 `resolve_*` **之前**（否则接线守卫会红）。
+    locked = store.get_locked_partner(gid, me, today)
+    if locked is not None:
+        row = store.get_member(gid, locked)
+        name = (str(row["nickname"]) if row is not None else "") or str(locked)
+        me_row = store.get_member(gid, me)
+        me_name = (str(me_row["nickname"]) if me_row is not None else "") or str(me)
+        used = int(existing["draws_used"]) if existing is not None else 0
+        return notices.locked_notice(
+            me_name=me_name,
+            partner_id=locked,
+            partner_name=name,
+            used=used,
+            limit=plugin_config.waifu_daily_limit,
+        )
+
     if redraw:
         action = resolve_change_action(
             existing=existing,
             daily_limit=plugin_config.waifu_daily_limit,
-            locked_today=store.has_lock(gid, me, today),
         )
     else:
         action = resolve_today_action(
@@ -318,7 +333,10 @@ async def _do_draw(
         )
 
     if action.action == "deny":
-        return action.message
+        return notices.quota_notice(
+            used=int(existing["draws_used"]) if existing is not None else 0,
+            limit=plugin_config.waifu_daily_limit,
+        )
 
     if action.action == "show" and action.row is not None:
         await _build_and_send(
@@ -357,7 +375,7 @@ async def _do_draw(
 
     # 「抽遍了」与「池子本来就没人」要分清：在调用前先算一个**未去重**的可用候选数
     # （只排除自己，**不**排除 locked/drawn）。为 0 才是真的没人。
-    raw_available = any(c.user_id != me for c in pool)
+    candidates = sum(1 for c in pool if c.user_id != me)
 
     picked = await _pick_eligible(
         pool=pool,
@@ -369,11 +387,14 @@ async def _do_draw(
         fetch_sex=_fetch_sex,
     )
     if picked is None:
-        # 池子里有人、但今天都被我抽遍了 → 专门的「抽遍了」文案；
-        # 池子本来就空 → 保留原文案（避免误报）。
-        if raw_available:
-            return rules.ALL_DRAWN_MESSAGE
-        return "群里还没有能抽的人（要有人发过言才会进池子）"
+        # 池子里有人、但今天都被我抽遍了 → 专门的「抽遍了」回执；
+        # 池子本来就空 → 单独的「还没人」回执（避免误报）。
+        if candidates:
+            return notices.all_drawn_notice(
+                drawn=len(store.drawn_partners(gid, me, today)),
+                candidates=candidates,
+            )
+        return notices.empty_pool_notice()
 
     store.set_daily(group_id=gid, user_id=me, date_key=today, partner_id=picked.user_id)
     row = store.get_daily(gid, me, today)
@@ -391,6 +412,31 @@ async def _do_draw(
         footer=footer,
     )
     return None
+
+
+async def _send_notice(
+    bot: Bot, event: GroupMessageEvent, ctx: render.NoticeContext
+) -> None:
+    """发一条回执：**优先图**，渲染不可用 → **信息等价**的纯文本。带 @（非抽取结果）。
+
+    与 `_build_and_send` 的区别：抽取结果卡**不带 @**（用户 2026-10-10 关闭全部 @），
+    回执是对命令发起人的回答 —— 需要 @ 到 ta，否则群里看不出这是回给谁的。
+    """
+    at = MessageSegment.at(event.user_id)
+    avatars = await render.fetch_avatars(render.notice_user_ids(ctx))
+    png = await render.render_notice(ctx, avatars=avatars)
+    if png is not None:
+        await bot.send_group_msg(
+            group_id=event.group_id, message=Message([at, MessageSegment.image(png)])
+        )
+    else:
+        await bot.send_group_msg(
+            group_id=event.group_id,
+            message=Message([
+                at,
+                MessageSegment.text(render.build_notice_fallback_text(ctx)),
+            ]),
+        )
 
 
 @dataclass(frozen=True)
@@ -621,20 +667,16 @@ divorce_cmd = on_command(CMD_DIVORCE, aliases={"/离婚"}, priority=PRIORITY, bl
 
 @today_cmd.handle()
 async def _h_today(bot: Bot, event: GroupMessageEvent) -> None:
-    err = await _do_draw(bot=bot, event=event, redraw=False)
-    if err is not None:
-        await today_cmd.finish(
-            MessageSegment.at(event.user_id) + MessageSegment.text(f"\n{err}")
-        )
+    notice = await _do_draw(bot=bot, event=event, redraw=False)
+    if notice is not None:
+        await _send_notice(bot, event, notice)
 
 
 @change_cmd.handle()
 async def _h_change(bot: Bot, event: GroupMessageEvent) -> None:
-    err = await _do_draw(bot=bot, event=event, redraw=True)
-    if err is not None:
-        await change_cmd.finish(
-            MessageSegment.at(event.user_id) + MessageSegment.text(f"\n{err}")
-        )
+    notice = await _do_draw(bot=bot, event=event, redraw=True)
+    if notice is not None:
+        await _send_notice(bot, event, notice)
 
 
 @confirm_cmd.handle()
@@ -646,7 +688,8 @@ async def _h_confirm(_bot: Bot, event: GroupMessageEvent) -> None:
     **别人仍然可能抽到 ta**。
 
     - **确认即定死**（用户 2026-10-11）：今天不能再发「换一只」换人
-      （`resolve_change_action` 读 `store.has_lock` → 直接拒绝，不消耗次数）。
+      （`_do_draw` 在算 action 之前读 `store.get_locked_partner` → 早退成
+      「已定人」回执，不消耗次数；用户 2026-10-14 起不再复用抽取卡片）。
     - 一天一个：再确认一次会改为锁定**新的那位**（覆盖，不是累加）。
     - 跨天恢复：明天 date_key 变了，锁自然失效。
     """

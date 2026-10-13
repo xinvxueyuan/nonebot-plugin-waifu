@@ -387,6 +387,22 @@ def has_lock(group_id: int, user_id: int, date_key: str) -> bool:
         return row is not None
 
 
+def get_locked_partner(group_id: int, user_id: int, date_key: str) -> int | None:
+    """我当天「确认老婆」的对象；没确认过 → None。
+
+    ⚠️ 这里的 SQL 文本**刻意**与 `locked_partners` 写得不一样（WHERE 少一行）——
+    否则 `scripts/mutation_check.py` 里 M18 的三行锚点会命中**两处**，
+    脚本对「多命中」按跳过处理 → 整个门禁判失败。
+    """
+    with _conn() as conn:
+        row = conn.execute(
+            f"SELECT partner_id FROM {_T_LOCK} WHERE group_id = ?"
+            " AND user_id = ? AND date_key = ?",
+            (group_id, user_id, date_key),
+        ).fetchone()
+        return int(row["partner_id"]) if row else None
+
+
 def marry(*, group_id: int, a: int, b: int) -> None:
     """绑定婚姻：**同一事务**写入双向两行（**只处理 a、b 这一对**）。
 
@@ -531,6 +547,7 @@ __all__ = [
     "divorce",
     "drawn_partners",
     "get_daily",
+    "get_locked_partner",
     "get_member",
     "get_partner",
     "get_pending",

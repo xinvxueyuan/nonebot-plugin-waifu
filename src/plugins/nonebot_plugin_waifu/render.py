@@ -19,12 +19,16 @@ htmlkit 的 `combined_img_fetcher` 里 `network_img_fetcher` **不带任何自�
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from dataclasses import dataclass
 import hashlib
 import html as html_mod
 import logging
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 logger = logging.getLogger("nonebot_plugin_waifu")
 
@@ -415,6 +419,17 @@ async def render_notice(
         return None
 
 
+async def fetch_avatars(ids: Sequence[int], *, limit: int = 4) -> dict[int, str | None]:
+    """并发取多人头像（复用 `fetch_avatar_data_uri` 的进程内缓存；失败 → None）。"""
+    sem = asyncio.Semaphore(max(1, int(limit)))
+
+    async def one(uid: int) -> tuple[int, str | None]:
+        async with sem:
+            return uid, await fetch_avatar_data_uri(uid)
+
+    return dict(await asyncio.gather(*(one(u) for u in dict.fromkeys(ids))))
+
+
 #: 回执卡私有部分（公共段见 `_BASE_CSS`）；`{color}` 由语气色注入（build_notice_html）。
 _NOTICE_CSS: Final[str] = (
     _BASE_CSS
@@ -450,6 +465,7 @@ __all__ = [
     "build_notice_fallback_text",
     "build_notice_html",
     "fetch_avatar_data_uri",
+    "fetch_avatars",
     "format_last_seen",
     "notice_user_ids",
     "render_card",

@@ -80,7 +80,6 @@ def test_change_always_redraws_and_increments():
     got = handle.resolve_change_action(
         existing=store.get_daily(GROUP, ME, today),
         daily_limit=20,
-        locked_today=False,
     )
     assert got.action == "draw"
 
@@ -95,47 +94,14 @@ def test_change_blocked_at_quota():
     got = handle.resolve_change_action(
         existing=store.get_daily(GROUP, ME, today),
         daily_limit=20,
-        locked_today=False,
     )
     assert got.action == "deny"
     assert got.message == "渣男，你今天没有老婆了！"
 
 
-def test_change_denied_when_confirmed_today():
-    """**新口径（用户 2026-10-11 拍板）**：确认老婆后「换一只」被拒，不消耗次数。"""
-    from nonebot_plugin_waifu import handle, rules, store
-
-    today = handle._today()
-    store.set_daily(group_id=GROUP, user_id=ME, date_key=today, partner_id=OTHER)
-    store.lock_daily(GROUP, ME, today)
-    got = handle.resolve_change_action(
-        existing=store.get_daily(GROUP, ME, today),
-        daily_limit=20,
-        locked_today=True,
-    )
-    assert got.action == "deny"
-    assert got.reason == "confirmed"
-    assert got.message == rules.CONFIRMED_MESSAGE
-    assert got.message == "你今天已确认老婆，不能再换"
-
-
-def test_change_confirmed_takes_priority_over_quota():
-    """判定顺序守卫：**「已确认」优先于配额**（配额满时仍回「已确认」而非配额文案）。"""
-    from nonebot_plugin_waifu import handle, rules, store
-
-    today = handle._today()
-    # 配额也用满 20 次 —— locked_today 仍必须抢先返回 confirmed
-    for _ in range(20):
-        store.set_daily(group_id=GROUP, user_id=ME, date_key=today, partner_id=OTHER)
-    store.lock_daily(GROUP, ME, today)
-    got = handle.resolve_change_action(
-        existing=store.get_daily(GROUP, ME, today),
-        daily_limit=20,
-        locked_today=True,
-    )
-    assert got.action == "deny"
-    assert got.reason == "confirmed", "已确认必须优先于配额（判定顺序被破坏）"
-    assert got.message == rules.CONFIRMED_MESSAGE
+# ⚠️「确认老婆后不能再换」的判定**不再在 `resolve_change_action` 里**
+# （用户 2026-10-14 口径）：`_do_draw` 在算 action 之前就早退成「已定人」回执 ——
+# 见文件末尾的 A3 小节。
 
 
 def test_draw_never_returns_locked_partner():
@@ -270,16 +236,20 @@ def test_all_drawn_message_is_exact():
 def test_empty_pool_message_unchanged_when_truly_empty():
     """**池子本来就没人** → 保留旧文案（不误报「抽遍了」）。
 
-    静态守卫：旧文案串仍在 `handle._do_draw` 里。
+    两种状态各走各的编译器：空池 → `notices.empty_pool_notice()`；
+    抽遍 → `notices.all_drawn_notice()`（文案仍是用户逐字那句，见 notices）。
     """
     import inspect
 
-    from nonebot_plugin_waifu import handle
+    from nonebot_plugin_waifu import handle, notices
 
     src = inspect.getsource(handle._do_draw)
-    assert "群里还没有能抽的人（要有人发过言才会进池子）" in src
-    # 两分支都要在：真正空池 / 抽遍
-    assert "rules.ALL_DRAWN_MESSAGE" in src
+    assert "empty_pool_notice" in src
+    assert "all_drawn_notice" in src
+    assert (
+        notices.empty_pool_notice().title
+        == "群里还没有能抽的人（要有人发过言才会进池子）"
+    )
 
 
 def test_do_draw_uses_all_drawn_message_branch():
@@ -354,3 +324,89 @@ async def test_married_can_still_draw(monkeypatch):
     row = store.get_daily(gid, ME, handle._today())
     assert row is not None and int(row["partner_id"]) == OTHER
     assert sent.await_count == 1
+
+
+# --------------------------------------------------------------------------- #
+# A3：确认之后不再复用抽取卡片 —— 早退成「已定人」回执（用户 2026-10-14）
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_confirmed_today_message_is_not_the_draw_card(monkeypatch):
+    """「确认」之后再发「今日老婆」/「换一只」→ 必须说清「已定人」，不走卡片。"""
+    from nonebot_plugin_waifu import handle, store
+
+    store.set_daily(
+        group_id=GROUP, user_id=ME, date_key=handle._today(), partner_id=OTHER
+    )
+    store.lock_daily(GROUP, ME, handle._today())
+    sent = AsyncMock()
+    monkeypatch.setattr(handle, "_build_and_send", sent)
+
+    for redraw in (False, True):
+        notice = await handle._do_draw(bot=MagicMock(), event=_event(ME), redraw=redraw)
+        assert notice is not None
+        assert notice.title == "今天已经定人"  # 不是抽取卡片
+        assert notice.avatar_user_id == OTHER  # 当事人头像在
+        assert any("不能再换" in str(v) for _k, v in notice.fields)  # 说清已定人
+        assert any("已用" in str(v) for _k, v in notice.fields)  # 数据在
+    assert sent.await_count == 0  # 关键：**一张抽取卡片都没发**（回执由 handler 发图）
+
+
+@pytest.mark.asyncio
+async def test_send_notice_prefers_image(monkeypatch):
+    """通用回执发送器：**[at] + 图**（渲染可用时），@ 到发起人。"""
+    from nonebot_plugin_waifu import handle, render
+
+    monkeypatch.setattr(render, "fetch_avatars", AsyncMock(return_value={}))
+    monkeypatch.setattr(render, "render_notice", AsyncMock(return_value=b"PNG"))
+    bot = MagicMock()
+    bot.send_group_msg = AsyncMock()
+    ctx = render.NoticeContext(title="今天已经定人", tone="deny", headline="甲 → 乙")
+    await handle._send_notice(bot, _event(ME), ctx)
+
+    msg = bot.send_group_msg.await_args.kwargs["message"]
+    assert [seg.type for seg in msg] == ["at", "image"]
+
+
+@pytest.mark.asyncio
+async def test_send_notice_falls_back_to_equivalent_text(monkeypatch):
+    """渲染不可用 → **[at] + 信息等价纯文本**（命令绝不能变成「没反应」）。"""
+    from nonebot_plugin_waifu import handle, render
+
+    monkeypatch.setattr(render, "fetch_avatars", AsyncMock(return_value={}))
+    monkeypatch.setattr(render, "render_notice", AsyncMock(return_value=None))
+    bot = MagicMock()
+    bot.send_group_msg = AsyncMock()
+    ctx = render.NoticeContext(
+        title="今天已经定人",
+        tone="deny",
+        fields=(("状态", "已确认，今天不能再换"),),
+    )
+    await handle._send_notice(bot, _event(ME), ctx)
+
+    msg = bot.send_group_msg.await_args.kwargs["message"]
+    assert [seg.type for seg in msg] == ["at", "text"]
+    text = msg[1].data["text"]
+    assert "今天已经定人" in text and "状态：已确认，今天不能再换" in text
+
+
+@pytest.mark.asyncio
+async def test_today_handler_sends_locked_notice_as_image(monkeypatch):
+    """接线：`_h_today` 必须把 `_do_draw` 返回的回执**真的发出去**（[at, 图]）。"""
+    from nonebot_plugin_waifu import handle, render, store
+
+    store.set_daily(
+        group_id=GROUP, user_id=ME, date_key=handle._today(), partner_id=OTHER
+    )
+    store.lock_daily(GROUP, ME, handle._today())
+    sent = AsyncMock()
+    monkeypatch.setattr(handle, "_build_and_send", sent)  # 防红转绿前误发真卡片
+    monkeypatch.setattr(render, "fetch_avatars", AsyncMock(return_value={}))
+    monkeypatch.setattr(render, "render_notice", AsyncMock(return_value=b"PNG"))
+    bot = MagicMock()
+    bot.send_group_msg = AsyncMock()
+
+    await handle._h_today(bot=bot, event=_event(ME))
+
+    assert sent.await_count == 0
+    msg = bot.send_group_msg.await_args.kwargs["message"]
+    assert [seg.type for seg in msg] == ["at", "image"]
