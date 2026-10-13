@@ -53,7 +53,9 @@ _SEX_LABELS: Final[dict[str, str]] = {
     "unknown": "未知",
 }
 
-_CSS: Final[str] = f"""
+#: 公共 CSS（抽取卡片 / 关系图 / 回执卡共用）：字体、卡片框、标题条、键值行只写一处，
+#: 否则「换个字体要改三遍」。花括号转义写法（`{{` `}}`）与原来的 `_CSS` 一致。
+_BASE_CSS: Final[str] = f"""
   * {{ box-sizing: border-box; }}
   body {{
     margin: 0; padding: 16px; background: #fdf2f8;
@@ -69,16 +71,6 @@ _CSS: Final[str] = f"""
     font-size: 26px; font-weight: bold; color: #831843;
     padding-left: 12px; border-left: 6px solid #db2777; margin-bottom: 18px;
   }}
-  .body {{ display: block; }}
-  .avatar {{
-    width: 120px; height: 120px; border-radius: 60px;
-    border: 3px solid #fbcfe8; margin-right: 22px;
-  }}
-  .ph {{
-    display: inline-block; width: 120px; height: 120px; border-radius: 60px;
-    background: #fce7f3; color: #9d174d; font-size: 44px;
-    text-align: center; line-height: 120px; margin-right: 22px;
-  }}
   .line {{ font-size: 20px; color: #334155; line-height: 32px; }}
   .key {{ font-size: 18px; color: #64748b; }}
   .val {{ font-size: 21px; color: #0f172a; }}
@@ -87,6 +79,23 @@ _CSS: Final[str] = f"""
     font-size: 17px; color: #9d174d; line-height: 26px;
   }}
 """
+
+#: 抽取卡片私有部分（公共段见 `_BASE_CSS`）
+_CSS: Final[str] = (
+    _BASE_CSS
+    + """
+  .body { display: block; }
+  .avatar {
+    width: 120px; height: 120px; border-radius: 60px;
+    border: 3px solid #fbcfe8; margin-right: 22px;
+  }
+  .ph {
+    display: inline-block; width: 120px; height: 120px; border-radius: 60px;
+    background: #fce7f3; color: #9d174d; font-size: 44px;
+    text-align: center; line-height: 120px; margin-right: 22px;
+  }
+"""
+)
 
 _TEMPLATE: Final[str] = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><style>{css}</style></head>
@@ -278,16 +287,173 @@ async def fetch_avatar_data_uri(user_id: int) -> str | None:
     return uri
 
 
+# ---------------------------------------------------------------------------
+# 回执卡（Notice）：所有面向群里的回复都用它 —— 与抽取卡片同款外观
+# ---------------------------------------------------------------------------
+
+#: 语气 → （主色，徽标文字）
+_NOTICE_TONES: Final[dict[str, tuple[str, str]]] = {
+    "info": ("#db2777", "提示"),
+    "ok": ("#16a34a", "完成"),
+    "warn": ("#f59e0b", "注意"),
+    "deny": ("#dc2626", "未生效"),
+}
+
+
+@dataclass(frozen=True)
+class NoticeItem:
+    """回执里「按人头」的一行（娶老婆可一次 @ 多人 / 名单类信息）。"""
+
+    user_id: int
+    line: str
+
+
+@dataclass(frozen=True)
+class NoticeContext:
+    """一条回执的全部内容（**信息密集**：标题 + 当事人 + 字段 + 名单 + 下一步）。"""
+
+    title: str
+    tone: str = "info"  # info | ok | warn | deny
+    headline: str = ""
+    avatar_user_id: int | None = None
+    fields: tuple[tuple[str, str], ...] = ()
+    items: tuple[NoticeItem, ...] = ()
+    note: str = ""
+
+
+def notice_user_ids(ctx: NoticeContext) -> tuple[int, ...]:
+    """要取头像的人（主图 + 名单），保序去重。"""
+    ids: list[int] = []
+    if ctx.avatar_user_id is not None:
+        ids.append(int(ctx.avatar_user_id))
+    ids.extend(int(it.user_id) for it in ctx.items)
+    return tuple(dict.fromkeys(ids))
+
+
+_NOTICE_TEMPLATE: Final[str] = """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>{css}</style></head>
+<body><div class="card">
+  <div class="title" data-tone="{tone}">{title}<span class="badge">{badge}</span></div>
+  <div class="head">{head}</div>
+  {avatar}
+  <div class="rows">{rows}</div>
+  {items}
+  <div class="footer">{note}</div>
+</div></body></html>"""
+
+
+def _mini_avatar(uid: int, pool: dict[int, str | None]) -> str:
+    uri = pool.get(uid)
+    if uri:
+        return f'<img class="mini" src="{html_mod.escape(uri)}">'
+    return f'<span class="ph-mini">{html_mod.escape(str(uid)[:1])}</span>'
+
+
+def build_notice_html(
+    ctx: NoticeContext, *, avatars: dict[int, str | None] | None = None
+) -> str:
+    """拼回执卡 HTML（**纯函数**，转义都在这里做）。"""
+    pool = avatars or {}
+    color, badge = _NOTICE_TONES.get(ctx.tone, _NOTICE_TONES["info"])
+    avatar = ""
+    if ctx.avatar_user_id is not None:
+        uid = int(ctx.avatar_user_id)
+        uri = pool.get(uid)
+        avatar = (
+            f'<img class="avatar" src="{html_mod.escape(uri)}">'
+            if uri
+            else f'<span class="ph">{html_mod.escape(str(uid)[:1])}</span>'
+        )
+    rows = "".join(
+        f'<div class="line"><span class="key">{html_mod.escape(str(k))}：</span>'
+        f'<span class="val">{html_mod.escape(str(v))}</span></div>'
+        for k, v in ctx.fields
+    )
+    items = "".join(
+        f'<div class="item">{_mini_avatar(int(it.user_id), pool)}'
+        f'<span class="val">{html_mod.escape(it.line)}</span></div>'
+        for it in ctx.items
+    )
+    # `_NOTICE_CSS` 已是成品 CSS（花括号全是单个的）：语气色用 replace 注入，
+    # **不能**用 `.format()` —— 它会把 CSS 自身的花括号当占位符直接报错。
+    return _NOTICE_TEMPLATE.format(
+        css=_NOTICE_CSS.replace("{color}", color),
+        tone=html_mod.escape(ctx.tone),
+        badge=html_mod.escape(badge),
+        title=html_mod.escape(ctx.title),
+        head=html_mod.escape(ctx.headline),
+        avatar=avatar,
+        rows=rows,
+        items=items,
+        note=html_mod.escape(ctx.note),
+    )
+
+
+def build_notice_fallback_text(ctx: NoticeContext) -> str:
+    """回执的纯文本等价物（**字段与图一一对应**，无 `@`）。"""
+    lines = [ctx.title]
+    if ctx.headline:
+        lines.append(ctx.headline)
+    lines.extend(f"{k}：{v}" for k, v in ctx.fields)
+    lines.extend(f"{it.user_id}：{it.line}" for it in ctx.items)
+    if ctx.note:
+        lines.append(ctx.note)
+    return "\n".join(lines)
+
+
+async def render_notice(
+    ctx: NoticeContext, *, avatars: dict[int, str | None] | None = None
+) -> bytes | None:
+    """渲染回执卡 PNG。**任何失败都只 warning 并返回 None**（调用方回退等价文本）。"""
+    try:
+        html_to_pic = _load_htmlkit()
+        return await html_to_pic(
+            build_notice_html(ctx, avatars=avatars), max_width=MAX_WIDTH
+        )
+    except Exception as e:
+        logger.warning("回执卡渲染失败，回退纯文本: %s: %s", type(e).__name__, e)
+        return None
+
+
+#: 回执卡私有部分（公共段见 `_BASE_CSS`）；`{color}` 由语气色注入（build_notice_html）。
+_NOTICE_CSS: Final[str] = (
+    _BASE_CSS
+    + """
+  .title .badge { font-size: 15px; color: #ffffff; background: {color};
+                  border-radius: 10px; padding: 2px 10px; margin-left: 10px; }
+  .head { font-size: 21px; color: #0f172a; line-height: 30px; margin-bottom: 10px; }
+  .avatar { width: 96px; height: 96px; border-radius: 48px; border: 3px solid #fbcfe8;
+            margin-bottom: 10px; }
+  .ph { display: inline-block; width: 96px; height: 96px; border-radius: 48px;
+        background: #fce7f3; color: #9d174d; font-size: 40px; text-align: center;
+        line-height: 96px; margin-bottom: 10px; }
+  .rows { display: block; }
+  .item { margin-top: 8px; }
+  .mini { width: 36px; height: 36px; border-radius: 18px; border: 2px solid #fbcfe8;
+          margin-right: 8px; }
+  .ph-mini { display: inline-block; width: 36px; height: 36px; border-radius: 18px;
+             background: #fce7f3; color: #9d174d; font-size: 18px; text-align: center;
+             line-height: 36px; margin-right: 8px; }
+"""
+)
+
+
 __all__ = [
     "CARD_WIDTH",
     "MAX_WIDTH",
     "CardContext",
+    "NoticeContext",
+    "NoticeItem",
     "avatar_url",
     "build_fallback_text",
     "build_html",
+    "build_notice_fallback_text",
+    "build_notice_html",
     "fetch_avatar_data_uri",
     "format_last_seen",
+    "notice_user_ids",
     "render_card",
+    "render_notice",
     "sex_label",
     "to_data_uri",
 ]
