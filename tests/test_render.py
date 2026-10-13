@@ -184,3 +184,55 @@ def test_avatar_failure_is_not_negatively_cached(monkeypatch):
     assert asyncio.run(render.fetch_avatar_data_uri(4242)) is None
     assert asyncio.run(render.fetch_avatar_data_uri(4242)) is not None
     assert calls["n"] == 2
+
+
+def _graph():
+    from nonebot_plugin_waifu import layout, relations
+
+    g = relations.build_relations(marriages=[(1, 2, 1.0)], crushes={3: 1}, max_edges=20)
+    return g, layout.layout_graph(g, focus=1)
+
+
+def test_graph_html_escapes_nicknames_and_draws_nodes():
+    from nonebot_plugin_waifu import render
+
+    _g, clusters = _graph()
+    html = render.build_graph_html(
+        clusters,
+        nicknames={1: "甲<b>", 2: "乙", 3: "丙"},
+        avatars={1: "data:image/jpeg;base64,AAAA"},
+    )
+    assert "<b>" not in html and "甲&lt;b&gt;" in html
+    assert html.count('class="node') == 3
+    assert "data:image/jpeg;base64,AAAA" in html
+    assert 'class="ph-av"' in html  # 没有头像的人用首字占位
+    assert "夫妻" in html and "倾心" in html  # 边上直接写关系名
+    assert "http" not in html  # 绝不出现网络图片 URL
+
+
+def test_graph_html_contains_edges_with_gradient_bands():
+    from nonebot_plugin_waifu import render
+
+    _g, clusters = _graph()
+    html = render.build_graph_html(clusters, nicknames={}, avatars={})
+    assert (
+        html.count("linear-gradient") >= 2
+    )  # 主方案；备选方案改断言 <div class="seg">
+
+
+def test_graph_fallback_text_has_no_at_and_lists_relations():
+    from nonebot_plugin_waifu import relations, render
+
+    g = relations.build_relations(marriages=[(1, 2, 1.0)], crushes={3: 1})
+    text = render.build_graph_fallback_text(g, nicknames={1: "甲", 2: "乙", 3: "丙"})
+    assert "夫妻" in text and "倾心" in text and "甲" in text
+    assert "@" not in text
+
+
+def test_graph_title_switches_with_focus():
+    from nonebot_plugin_waifu import render
+
+    _g, clusters = _graph()
+    a = render.build_graph_html(clusters, nicknames={1: "甲"}, avatars={}, focus=1)
+    b = render.build_graph_html(clusters, nicknames={1: "甲"}, avatars={})
+    assert "以「甲」为中心" in a and "以「甲」为中心" not in b

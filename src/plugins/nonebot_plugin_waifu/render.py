@@ -25,10 +25,14 @@ from dataclasses import dataclass
 import hashlib
 import html as html_mod
 import logging
+import math
 from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from .layout import ClusterLayout, EdgeLine, NodeBox
+    from .relations import RelationGraph
 
 logger = logging.getLogger("nonebot_plugin_waifu")
 
@@ -453,6 +457,234 @@ _NOTICE_CSS: Final[str] = (
 )
 
 
+# ---------------------------------------------------------------------------
+# 关系图：节点 = 头像 + 昵称，边 = `linear-gradient` 硬色带画出的斜线
+#
+# ⚠️ litehtml **没有 `transform`**：斜线不能靠旋转盒子画。用渐变硬色带的那条缝当线
+# （现场探针实测：线上像素数与理论值一致）—— 盒 = 线段的 bbox，色带穿过盒中心，
+# 于是色带**恰好**是这条线段。
+# ---------------------------------------------------------------------------
+
+#: 关系图：边只有两种配色（夫妻 = 主题粉实线 / 倾心 = 琥珀虚线）
+_NODE_EDGE_COLOR: Final[dict[str, str]] = {
+    "marriage": "#db2777",  # 夫妻：主题粉、实线粗
+    "crush": "#f59e0b",  # 倾心：琥珀、虚线细
+}
+
+#: 边上直接写的关系名；`倾心→` 让「谁倾心谁」在图上可读（用户口径：能看出方向）
+_EDGE_LABEL: Final[dict[str, str]] = {"marriage": "夫妻", "crush": "倾心→"}
+
+#: 关系图私有部分（公共段见 `_BASE_CSS`：字体栈/卡片框/标题条**只写一处**）
+_GRAPH_CSS: Final[str] = (
+    _BASE_CSS
+    + """
+  .sub { font-size: 17px; color: #9d174d; margin-bottom: 14px; }
+  .cluster { position: relative; margin-bottom: 10px; }
+  .cap { font-size: 16px; color: #9d174d; margin-bottom: 4px; }
+  /* 96px = layout.NODE_W / layout.NODE_H（节点盒尺寸）；两处必须一致 */
+  .node { position: absolute; width: 96px; height: 96px; text-align: center; }
+  .avatar { width: 64px; height: 64px; border-radius: 32px; border: 3px solid #fbcfe8;
+            display: block; margin: 0 auto; }
+  .ph-av { display: block; width: 64px; height: 64px; border-radius: 32px;
+           background: #fce7f3; color: #9d174d; font-size: 26px;
+           line-height: 64px; text-align: center; margin: 0 auto; }
+  .nm { font-size: 16px; color: #0f172a; line-height: 24px; }
+  .seg { position: absolute; }
+  .elab { position: absolute; font-size: 14px; padding: 1px 6px;
+          border-radius: 8px; background: #ffffff; }
+"""
+)
+
+_GRAPH_TEMPLATE: Final[str] = """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>{css}</style></head>
+<body><div class="card">
+  <div class="title">{title}</div>
+  <div class="sub">{sub}</div>
+  {clusters}
+  <div class="footer">{footer}</div>
+</div></body></html>"""
+
+_SEG_TEMPLATE: Final[str] = (
+    '<div class="seg" style="left:{x}px;top:{y}px;width:{w}px;height:{h}px;'
+    'background:{bg}"></div>'
+)
+_NODE_TEMPLATE: Final[str] = (
+    '<div class="node" style="left:{x}px;top:{y}px">{avatar}'
+    '<div class="nm">{name}</div></div>'
+)
+_LABEL_TEMPLATE: Final[str] = (
+    '<div class="elab" style="left:{x}px;top:{y}px;color:{color};'
+    'border:1px solid {color}">{text}</div>'
+)
+
+
+def _band_background(w: int, h: int, angle: float, color: str, px: int = 3) -> str:
+    """用 `linear-gradient` 的硬色带画出穿过盒中心的斜线段（litehtml 无 transform）。
+
+    渐变轴取**垂直线段**方向（`angle = atan2(dy, dx)` 的度数），色带放在 50%：
+    色带与线段平行、且穿过盒中心 —— 而盒就是线段的 bbox，所以色带**恰好**是这条线段。
+    色带宽度按渐变线长度换算成百分比：`L = |w·sinθ| + |h·cosθ|`。
+    """
+    rad = math.radians(angle)
+    length = abs(w * math.sin(rad)) + abs(h * math.cos(rad)) or 1.0
+    half = (px / 2) / length * 100.0
+    lo, hi = 50.0 - half, 50.0 + half
+    return (
+        f"linear-gradient({angle:.2f}deg, transparent {lo:.2f}%, {color} {lo:.2f}%,"
+        f" {color} {hi:.2f}%, transparent {hi:.2f}%)"
+    )
+
+
+def _segment_html(line: EdgeLine, color: str, *, dashes: int = 1) -> str:
+    """一条边：`dashes=1` 实线；`>1` 拆成虚线段（每段一个小 bbox，共用同一角度）。
+
+    ⚠️ 备选方案（探针 B FAIL 时）把本函数体换成「沿线段布 3×3px 小方块」即可，
+    入参/返回不变，上层模板不用改。
+    """
+    if dashes <= 1:
+        return _SEG_TEMPLATE.format(
+            x=line.x,
+            y=line.y,
+            w=line.w,
+            h=line.h,
+            bg=_band_background(line.w, line.h, line.angle, color),
+        )
+    out: list[str] = []
+    slices = dashes * 2 - 1
+    for i in range(slices):
+        if i % 2:  # 奇数片留白 = 虚线间隙
+            continue
+        t0, t1 = i / slices, (i + 1) / slices
+        w = max(1, round(line.w * (t1 - t0)))
+        h = max(1, round(line.h * (t1 - t0)))
+        out.append(
+            _SEG_TEMPLATE.format(
+                x=round(line.x + line.w * t0),
+                y=round(line.y + line.h * t0),
+                w=w,
+                h=h,
+                bg=_band_background(w, h, line.angle, color),
+            )
+        )
+    return "".join(out)
+
+
+def _node_html(
+    node: NodeBox, *, nicknames: dict[int, str], avatars: dict[int, str | None]
+) -> str:
+    raw = (nicknames.get(node.uid) or "").strip()
+    name = html_mod.escape(raw or str(node.uid))
+    uri = avatars.get(node.uid)
+    if uri:
+        avatar = f'<img class="avatar" src="{html_mod.escape(uri)}">'
+    else:
+        first = (raw or str(node.uid))[:1]
+        avatar = f'<span class="ph-av">{html_mod.escape(first)}</span>'
+    return _NODE_TEMPLATE.format(x=node.x, y=node.y, avatar=avatar, name=name)
+
+
+def build_graph_html(
+    clusters: Sequence[ClusterLayout],
+    *,
+    nicknames: dict[int, str],
+    avatars: dict[int, str | None] | None = None,
+    focus: int | None = None,
+    title: str = "老婆关系图",
+) -> str:
+    """拼关系图 HTML（**纯函数**，转义都在这里做）。"""
+    pool = avatars or {}
+    blocks: list[str] = []
+    for cluster in clusters:
+        segs: list[str] = []
+        for line in cluster.lines:
+            color = _NODE_EDGE_COLOR.get(line.kind, "#db2777")
+            dashes = 5 if line.kind == "crush" else 1
+            segs.append(_segment_html(line, color, dashes=dashes))
+            segs.append(
+                _LABEL_TEMPLATE.format(
+                    x=line.label_x,
+                    y=line.label_y,
+                    color=color,
+                    text=html_mod.escape(_EDGE_LABEL.get(line.kind, line.kind)),
+                )
+            )
+        nodes = "".join(
+            _node_html(n, nicknames=nicknames, avatars=pool) for n in cluster.nodes
+        )
+        cap = (
+            f'<div class="cap">{html_mod.escape(cluster.caption)}</div>'
+            if cluster.caption
+            else ""
+        )
+        blocks.append(
+            f'<div class="cluster" style="width:{cluster.width}px;'
+            f'height:{cluster.height}px">{cap}{"".join(segs)}{nodes}</div>'
+        )
+    who = (
+        f"以「{html_mod.escape((nicknames.get(focus) or str(focus)).strip())}」为中心"
+        if focus
+        else "本群全部"
+    )
+    sub = f"{who} · {len(clusters)} 块 · {sum(len(c.lines) for c in clusters)} 条关系"
+    footer = "粉色实线=夫妻 · 橙色虚线=倾心（箭头方向 = 倾心的一方 → 被倾心的人）"
+    return _GRAPH_TEMPLATE.format(
+        css=_GRAPH_CSS,
+        title=html_mod.escape(title),
+        sub=html_mod.escape(sub),
+        clusters="".join(blocks),
+        footer=html_mod.escape(footer),
+    )
+
+
+async def render_graph(
+    clusters: Sequence[ClusterLayout],
+    *,
+    nicknames: dict[int, str],
+    avatars: dict[int, str | None] | None = None,
+    focus: int | None = None,
+) -> bytes | None:
+    """渲染关系图 PNG。**任何失败都只 warning 并返回 None**（调用方回退纯文本）。"""
+    try:
+        html_to_pic = _load_htmlkit()
+        return await html_to_pic(
+            build_graph_html(
+                clusters, nicknames=nicknames, avatars=avatars, focus=focus
+            ),
+            max_width=MAX_WIDTH,
+        )
+    except Exception as e:
+        logger.warning("关系图渲染失败，回退纯文本: %s: %s", type(e).__name__, e)
+        return None
+
+
+def build_graph_fallback_text(
+    graph: RelationGraph,
+    *,
+    nicknames: dict[int, str],
+    focus: int | None = None,
+) -> str:
+    """纯文本回退（**无 `@`**）。"""
+
+    def name(uid: int) -> str:
+        return (nicknames.get(uid) or "").strip() or str(uid)
+
+    lines = [
+        "老婆关系图" + (f"（以「{name(focus)}」为中心）" if focus else "（本群）"),
+        f"共 {len(graph.nodes)} 人 · {len(graph.edges)} 条关系",
+    ]
+    for kind, label in (("marriage", "夫妻"), ("crush", "倾心")):
+        got = [
+            f"{name(e.src)} {'与' if kind == 'marriage' else '→'} {name(e.dst)}"
+            for e in graph.edges
+            if e.kind == kind
+        ]
+        if got:
+            lines.append(f"{label}：" + "，".join(got))
+    if len(graph.edges) < graph.total_edges:
+        lines.append(f"（还有 {graph.total_edges - len(graph.edges)} 条未显示）")
+    return "\n".join(lines)[:1200]
+
+
 __all__ = [
     "CARD_WIDTH",
     "MAX_WIDTH",
@@ -461,6 +693,8 @@ __all__ = [
     "NoticeItem",
     "avatar_url",
     "build_fallback_text",
+    "build_graph_fallback_text",
+    "build_graph_html",
     "build_html",
     "build_notice_fallback_text",
     "build_notice_html",
@@ -469,6 +703,7 @@ __all__ = [
     "format_last_seen",
     "notice_user_ids",
     "render_card",
+    "render_graph",
     "render_notice",
     "sex_label",
     "to_data_uri",
