@@ -258,11 +258,10 @@ def test_confirm_reply_no_longer_claims_change_skips():
     assert "不能再换" in body, "确认文案应说明今天不能再换"
 
 
-def test_pending_window_and_cd_constants():
+def test_pending_window_is_three_minutes():
     from nonebot_plugin_waifu import rules
 
     assert rules.PENDING_WINDOW_SECONDS == 180
-    assert rules.DIVORCE_CD_SECONDS == 86400 * 3
 
 
 def test_built_html_never_contains_http_image_url():

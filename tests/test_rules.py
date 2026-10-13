@@ -1,4 +1,4 @@
-"""rules 纯函数：日期边界、配额、冷却。全部不碰 IO。"""
+"""rules 纯函数：日期边界、配额。全部不碰 IO。"""
 
 from __future__ import annotations
 
@@ -18,44 +18,18 @@ def test_date_key_uses_configured_timezone():
 def test_quota_allows_under_limit():
     from nonebot_plugin_waifu import rules
 
-    assert rules.can_draw(draws_used=0, daily_limit=20, cd_until=None, now=1000.0).ok
-    assert rules.can_draw(draws_used=19, daily_limit=20, cd_until=None, now=1000.0).ok
+    assert rules.can_draw(draws_used=0, daily_limit=20).ok
+    assert rules.can_draw(draws_used=19, daily_limit=20).ok
 
 
 def test_quota_blocks_at_limit_with_exact_message():
     """文案是用户明确指定的，逐字断言。"""
     from nonebot_plugin_waifu import rules
 
-    r = rules.can_draw(draws_used=20, daily_limit=20, cd_until=None, now=1000.0)
+    r = rules.can_draw(draws_used=20, daily_limit=20)
     assert not r.ok
     assert r.reason == "quota"
     assert r.message == "渣男，你今天没有老婆了！"
-
-
-def test_divorce_cd_blocks_and_reports_days():
-    from nonebot_plugin_waifu import rules
-
-    now = 1_700_000_000.0
-    r = rules.can_draw(
-        draws_used=0, daily_limit=20, cd_until=now + 2.5 * 86400, now=now
-    )
-    assert not r.ok
-    assert r.reason == "cd"
-    assert r.days_left == 3  # 向上取整
-    assert "3 天后再来" in r.message  # 文案天数取自 days_left
-    # 剩余不足 2 天时文案必须是 2 —— 证明天数不是写死的 3
-    r2 = rules.can_draw(
-        draws_used=0, daily_limit=20, cd_until=now + 1.5 * 86400, now=now
-    )
-    assert r2.days_left == 2
-    assert "2 天后再来" in r2.message
-
-
-def test_expired_cd_does_not_block():
-    from nonebot_plugin_waifu import rules
-
-    now = 1_700_000_000.0
-    assert rules.can_draw(draws_used=0, daily_limit=20, cd_until=now - 1, now=now).ok
 
 
 def test_normalize_sex():
@@ -230,12 +204,6 @@ def test_pending_window_is_three_minutes():
     assert not rules.pending_alive(requested_at=0.0, now=181.0)
 
 
-def test_divorce_cd_is_three_days():
-    from nonebot_plugin_waifu import rules
-
-    assert rules.DIVORCE_CD_SECONDS == 3 * 86400
-
-
 def test_config_defaults_are_the_confirmed_values():
     """默认值必须等于与用户确认的口径（改这里前先回去问）。"""
     from nonebot_plugin_waifu.config import Config
@@ -243,7 +211,6 @@ def test_config_defaults_are_the_confirmed_values():
     c = Config()
     assert c.waifu_daily_limit == 20  # 一天最多 20 次
     assert c.waifu_pending_minutes == 3  # 娶老婆/离婚确认窗口 3 分钟
-    assert c.waifu_divorce_cd_days == 3  # 离婚 CD 3 天
     assert c.waifu_orientation == "all"  # 用户口径：默认「所有」= 不限
     assert c.waifu_match_priority > c.waifu_command_priority
     assert c.waifu_show_quota_in_card is True

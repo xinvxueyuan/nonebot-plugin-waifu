@@ -242,15 +242,15 @@ def test_divorce_clears_both_directions(tmp_store):
     assert not store.is_married(100, 1)
 
 
-def test_divorce_clears_marriage_and_sets_cd_for_requester_only(tmp_store):
-    """离婚后：关系清空，**只有发起方**有冷却。"""
+def test_divorce_clears_marriage_rows(tmp_store):
+    """离婚后：关系行清空、双方都不再「已婚」（冷却已随 2026-10-14 口径取消）。"""
     from nonebot_plugin_waifu import store
 
     store.marry(group_id=100, a=1, b=2)
     store.divorce(group_id=100, a=1, b=2)
-    store.set_divorce_cd(group_id=100, user_id=1, until=999999.0)
-    assert store.get_divorce_cd(100, 1) == 999999.0
-    assert store.get_divorce_cd(100, 2) is None
+    assert store.count_partners(100, 1) == 0
+    assert store.count_partners(100, 2) == 0
+    assert not store.is_married(100, 1) and not store.is_married(100, 2)
 
 
 def test_get_partner_none_when_never_married(tmp_store):

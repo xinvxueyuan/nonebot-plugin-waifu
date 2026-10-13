@@ -73,12 +73,6 @@ MUTATIONS = [
         "PENDING_WINDOW_SECONDS: Final[int] = 99999",
     ),
     (
-        "M4 离婚 CD 从 3 天改 0",
-        RULES,
-        "DIVORCE_CD_SECONDS: Final[int] = 3 * 86400",
-        "DIVORCE_CD_SECONDS: Final[int] = 0",
-    ),
-    (
         "M5 抽签不排除自己",
         RULES,
         "        if c.user_id != me\n        and c.user_id not in excluded",
@@ -123,12 +117,6 @@ MUTATIONS = [
         '        if True:\n'
         '            ts = 0.0\n'
         '            if True:',
-    ),
-    (
-        "M11 离婚 CD 给双方而不是只给发起方",
-        HANDLE,
-        "                    user_id=requester,",
-        "                    user_id=partner,",
     ),
     (
         "M12 「确认老婆」顺手把对方也锁了（用户明确不要）",

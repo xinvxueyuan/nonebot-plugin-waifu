@@ -24,9 +24,7 @@ def test_quota_is_per_person_per_day(tmp_store):
         )
     row = store.get_daily(GROUP, ME, "2026-10-10")
     assert row["draws_used"] == 20
-    assert not rules.can_draw(
-        draws_used=int(row["draws_used"]), daily_limit=20, cd_until=None, now=1.0
-    ).ok
+    assert not rules.can_draw(draws_used=int(row["draws_used"]), daily_limit=20).ok
 
 
 def test_locked_partner_removed_from_own_draw_today(tmp_store):

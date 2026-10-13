@@ -1,4 +1,4 @@
-"""纯函数层：抽签、配额、冷却、性别判据、日期边界。
+"""纯函数层：抽签、配额、性别判据、日期边界。
 
 **全部不碰 IO、不读配置对象、不 import NoneBot** —— 这样每个分支都能用
 确定性参数（注入 `rng` / `now`）单测。抽签逻辑只在生产跑到，写错了就是
@@ -17,9 +17,6 @@ if TYPE_CHECKING:
 
 #: 娶老婆/离婚的二次确认窗口：**3 分钟**（用户口径）。窗口外视为失效。
 PENDING_WINDOW_SECONDS: Final[int] = 180
-
-#: 离婚后的冷却：**3 天**。只锁**发起离婚的那个人**（用户口径）。
-DIVORCE_CD_SECONDS: Final[int] = 3 * 86400
 
 #: 配额用尽时的提示文案（**用户逐字指定，不要改字**）。
 QUOTA_MESSAGE: Final[str] = "渣男，你今天没有老婆了！"
@@ -55,7 +52,6 @@ class DrawCheck:
     ok: bool
     reason: str = ""
     message: str = ""
-    days_left: int = 0
 
     def as_denial(self) -> tuple[str, str]:
         return self.reason, self.message
@@ -79,33 +75,15 @@ def date_key(ts: float, *, tz_name: str = DEFAULT_TZ) -> str:
     return datetime.fromtimestamp(ts, tz=tz).strftime("%Y-%m-%d")
 
 
-def can_draw(
-    *,
-    draws_used: int,
-    daily_limit: int,
-    cd_until: float | None,
-    now: float | None = None,
-) -> DrawCheck:
-    """能不能抽。判定顺序固定：**先配额、后冷却**（两个都不满足时给配额文案）。
+def can_draw(*, draws_used: int, daily_limit: int) -> DrawCheck:
+    """能不能抽。**现在只剩配额一条判据**（用户 2026-10-14：离婚冷却取消）。
 
     Args:
         draws_used: 当日已用次数（含「今日老婆」的首次抽，用户口径：所有抽都计数）。
         daily_limit: 当日上限（配置 `WAIFU_DAILY_LIMIT`，默认 20）。
-        cd_until: 离婚冷却截止时刻（unix 秒）；None 或已过 = 无冷却。
-        now: 当前时刻（可注入，便于确定性测试）。
     """
     if draws_used >= daily_limit:
         return DrawCheck(False, reason="quota", message=QUOTA_MESSAGE)
-    ts = time.time() if now is None else now
-    if cd_until is not None and cd_until > ts:
-        left = cd_until - ts
-        days = int(left // 86400) + (1 if left % 86400 else 0)
-        return DrawCheck(
-            False,
-            reason="cd",
-            message=f"你刚离过婚，{days} 天后再来吧",
-            days_left=days,
-        )
     return DrawCheck(True)
 
 
@@ -200,7 +178,6 @@ __all__ = [
     "ALL_DRAWN_MESSAGE",
     "CONFIRMED_MESSAGE",
     "DEFAULT_TZ",
-    "DIVORCE_CD_SECONDS",
     "PENDING_WINDOW_SECONDS",
     "QUOTA_MESSAGE",
     "Candidate",

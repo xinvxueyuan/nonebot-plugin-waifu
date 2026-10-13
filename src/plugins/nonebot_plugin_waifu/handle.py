@@ -10,7 +10,7 @@
                         （不锁对方），效果是「我之后抽签不会再抽到 ta」；每日恢复。
     娶老婆 @xxx||int      需**双方互相**发「娶老婆 @对方」；窗口 3 分钟；绑定后双方
                         不再参与他人抽取、也不能再抽群友。
-    离婚 @xxx||int      同上；离婚后**发起方**进入 3 天 CD。
+    离婚 @xxx||int      同上；离婚后无冷却（用户 2026-10-14 取消，随离随抽）。
 
 配额：一天每人最多 20 次，**所有「抽」都计数**（首次 + 每次换）。超限文案
 「渣男，你今天没有老婆了！」是用户逐字指定的。
@@ -85,19 +85,15 @@ def resolve_today_action(
     *,
     existing: sqlite3.Row | None,
     daily_limit: int,
-    cd_until: float | None,
-    now: float,
     draws_used: int = 0,
 ) -> Action:
     """「今日老婆 / 抽老婆」该干什么。
 
-    **已有记录 → 展示**（不换人、不计数）；没有 → 走配额/冷却判定后抽取。
+    **已有记录 → 展示**（不换人、不计数）；没有 → 走配额判定后抽取。
     """
     if existing is not None:
         return Action(action="show", row=existing)
-    check = rules.can_draw(
-        draws_used=draws_used, daily_limit=daily_limit, cd_until=cd_until, now=now
-    )
+    check = rules.can_draw(draws_used=draws_used, daily_limit=daily_limit)
     if not check.ok:
         return Action(action="deny", reason=check.reason, message=check.message)
     return Action(action="draw")
@@ -107,13 +103,11 @@ def resolve_change_action(
     *,
     existing: sqlite3.Row | None,
     daily_limit: int,
-    cd_until: float | None,
-    now: float,
     locked_today: bool,
 ) -> Action:
-    """「换一只」该干什么：**今日已确认则拒绝**，否则永远走抽取（有记录也要换人），但要过配额/冷却。
+    """「换一只」该干什么：**今日已确认则拒绝**，否则永远走抽取（有记录也要换人），但要过配额。
 
-    判定顺序：**先「已确认」→ 再配额 → 后冷却**（用户 2026-10-11 口径：
+    判定顺序：**先「已确认」→ 再配额**（用户 2026-10-11 口径：
     确认即定死，且不消耗次数 —— 所以拒绝要走「已确认」这一支，压在配额之前）。
     """
     if locked_today:
@@ -121,9 +115,7 @@ def resolve_change_action(
             action="deny", reason="confirmed", message=rules.CONFIRMED_MESSAGE
         )
     used = int(existing["draws_used"]) if existing is not None else 0
-    check = rules.can_draw(
-        draws_used=used, daily_limit=daily_limit, cd_until=cd_until, now=now
-    )
+    check = rules.can_draw(draws_used=used, daily_limit=daily_limit)
     if not check.ok:
         return Action(action="deny", reason=check.reason, message=check.message)
     return Action(action="draw", row=existing)
@@ -313,22 +305,17 @@ async def _do_draw(
     gid, me = event.group_id, int(event.user_id)
     today = _today()
     existing = store.get_daily(gid, me, today)
-    now = time.time()
 
     if redraw:
         action = resolve_change_action(
             existing=existing,
             daily_limit=plugin_config.waifu_daily_limit,
-            cd_until=store.get_divorce_cd(gid, me),
-            now=now,
             locked_today=store.has_lock(gid, me, today),
         )
     else:
         action = resolve_today_action(
             existing=existing,
             daily_limit=plugin_config.waifu_daily_limit,
-            cd_until=store.get_divorce_cd(gid, me),
-            now=now,
             draws_used=int(existing["draws_used"]) if existing is not None else 0,
         )
 
@@ -574,7 +561,7 @@ def apply_marry(
 def apply_divorce(
     *, group_id: int, requester: int, partner: int, now: float
 ) -> MarriageOutcome:
-    """处理一次「离婚 @partner」：同样**需双方互相发**；成功后给**发起方**上 CD。
+    """处理一次「离婚 @partner」：同样**需双方互相发**；成功后无任何冷却。
 
     多配偶下：只能离**自己确实娶了的**那一位（`partner` 必须在 `list_partners` 里）。
     """
@@ -599,18 +586,10 @@ def apply_divorce(
             store.clear_pending(
                 group_id, requester=requester, partner=partner, kind="divorce"
             )
-            days = plugin_config.waifu_divorce_cd_days
-            if days > 0:
-                # **只锁发起方**（用户口径）：第一次发命令的那个人。
-                store.set_divorce_cd(
-                    group_id=group_id,
-                    user_id=requester,
-                    until=now + days * 86400,
-                )
             return MarriageOutcome(
                 bound=False,
                 partner=partner,
-                message=f"已离婚。发起方 {days} 天内不能再抽老婆",
+                message="已离婚",
             )
         store.clear_pending(
             group_id, requester=partner, partner=requester, kind="divorce"

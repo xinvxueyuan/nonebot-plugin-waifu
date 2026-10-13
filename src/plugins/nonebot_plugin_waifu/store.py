@@ -412,7 +412,7 @@ def marry(*, group_id: int, a: int, b: int) -> None:
 
 
 def divorce(*, group_id: int, a: int, b: int) -> None:
-    """解除婚姻：同事务删除**这一对**的双向两行（冷却由 `set_divorce_cd` 另管）。
+    """解除婚姻：同事务删除**这一对**的双向两行。
 
     ⚠️ 只删 a、b 之间的两行 —— **不能**用 `user_id IN (?, ?)` 删光，
     否则会把 a 与 b 各自在别处的配偶关系一并抹掉（多配偶下的核心回归）。
@@ -484,26 +484,6 @@ def married_ids(group_id: int) -> set[int]:
         return {int(r["user_id"]) for r in rows}
 
 
-def set_divorce_cd(*, group_id: int, user_id: int, until: float) -> None:
-    """给**离婚发起方**设冷却截止时刻。"""
-    with _conn() as conn:
-        conn.execute(
-            f"INSERT INTO {_T_CD} (group_id, user_id, until) VALUES (?, ?, ?)"
-            " ON CONFLICT (group_id, user_id) DO UPDATE SET until = excluded.until",
-            (group_id, user_id, until),
-        )
-
-
-def get_divorce_cd(group_id: int, user_id: int) -> float | None:
-    """取冷却截止时刻；没有返回 None。"""
-    with _conn() as conn:
-        row = conn.execute(
-            f"SELECT until FROM {_T_CD} WHERE group_id = ? AND user_id = ?",
-            (group_id, user_id),
-        ).fetchone()
-        return float(row["until"]) if row else None
-
-
 def set_pending(
     *,
     group_id: int,
@@ -562,7 +542,6 @@ __all__ = [
     "divorce",
     "drawn_partners",
     "get_daily",
-    "get_divorce_cd",
     "get_member",
     "get_partner",
     "get_pending",
@@ -579,7 +558,6 @@ __all__ = [
     "purge_pending_before",
     "record_drawn",
     "set_daily",
-    "set_divorce_cd",
     "set_pending",
     "touch_member",
 ]

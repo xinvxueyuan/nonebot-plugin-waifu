@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import time
+from unittest.mock import AsyncMock, MagicMock
+
 from nonebot.adapters.onebot.v11 import GroupMessageEvent
 from nonebot.adapters.onebot.v11.event import Sender
 import pytest
@@ -19,6 +22,7 @@ def _event(user_id: int = ME) -> GroupMessageEvent:
         sub_type="normal",
         user_id=user_id,
         message_type="group",
+        message_id=0,
         message=[],
         raw_message="",
         font=0,
@@ -47,9 +51,7 @@ def test_today_uses_today_then_shows_existing():
     assert row["partner_id"] == OTHER
     assert row["draws_used"] == 1
     # 再执行一次「今日老婆」不应改变记录
-    same = handle.resolve_today_action(
-        existing=row, daily_limit=20, cd_until=None, now=1.0
-    )
+    same = handle.resolve_today_action(existing=row, daily_limit=20)
     assert same.action == "show"
     assert same.row is not None
 
@@ -57,30 +59,16 @@ def test_today_uses_today_then_shows_existing():
 def test_today_draws_when_no_record():
     from nonebot_plugin_waifu import handle
 
-    got = handle.resolve_today_action(
-        existing=None, daily_limit=20, cd_until=None, now=1.0
-    )
+    got = handle.resolve_today_action(existing=None, daily_limit=20)
     assert got.action == "draw"
 
 
 def test_today_blocks_on_quota_even_without_record():
     from nonebot_plugin_waifu import handle
 
-    got = handle.resolve_today_action(
-        existing=None, daily_limit=20, cd_until=None, now=1.0, draws_used=20
-    )
+    got = handle.resolve_today_action(existing=None, daily_limit=20, draws_used=20)
     assert got.action == "deny"
     assert got.message == "渣男，你今天没有老婆了！"
-
-
-def test_today_blocks_on_divorce_cd():
-    from nonebot_plugin_waifu import handle
-
-    got = handle.resolve_today_action(
-        existing=None, daily_limit=20, cd_until=500.0, now=100.0
-    )
-    assert got.action == "deny"
-    assert got.reason == "cd"
 
 
 def test_change_always_redraws_and_increments():
@@ -92,8 +80,6 @@ def test_change_always_redraws_and_increments():
     got = handle.resolve_change_action(
         existing=store.get_daily(GROUP, ME, today),
         daily_limit=20,
-        cd_until=None,
-        now=1.0,
         locked_today=False,
     )
     assert got.action == "draw"
@@ -109,8 +95,6 @@ def test_change_blocked_at_quota():
     got = handle.resolve_change_action(
         existing=store.get_daily(GROUP, ME, today),
         daily_limit=20,
-        cd_until=None,
-        now=1.0,
         locked_today=False,
     )
     assert got.action == "deny"
@@ -127,8 +111,6 @@ def test_change_denied_when_confirmed_today():
     got = handle.resolve_change_action(
         existing=store.get_daily(GROUP, ME, today),
         daily_limit=20,
-        cd_until=None,
-        now=1.0,
         locked_today=True,
     )
     assert got.action == "deny"
@@ -149,8 +131,6 @@ def test_change_confirmed_takes_priority_over_quota():
     got = handle.resolve_change_action(
         existing=store.get_daily(GROUP, ME, today),
         daily_limit=20,
-        cd_until=None,
-        now=1.0,
         locked_today=True,
     )
     assert got.action == "deny"
@@ -321,3 +301,34 @@ def test_do_draw_uses_all_drawn_message_branch():
     assert after_dedup == []
     # → 应命中「抽遍」文案而非「没人」
     assert rules.ALL_DRAWN_MESSAGE == "今天群里的人你已经抽遍了，明天再来"
+
+
+# --------------------------------------------------------------------------- #
+# A2：取消离婚冷却（用户 2026-10-14）—— 离婚后**立刻**就能再抽
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_divorced_requester_can_draw_immediately(monkeypatch):
+    """离婚后**立刻**就能再抽，不再等 3 天（用户 2026-10-14：取消离婚冷却）。
+
+    刻意让**完成离婚那次的 requester**（OTHER）来抽：旧逻辑把 3 天 CD 挂在
+    这个人头上 —— 冷却只要还在，这条必红。
+    """
+    from nonebot_plugin_waifu import handle, store
+
+    store.marry(group_id=GROUP, a=ME, b=OTHER)
+    # ME 发起 → OTHER 回发确认 → 离婚生效
+    handle.apply_divorce(group_id=GROUP, requester=ME, partner=OTHER, now=time.time())
+    out = handle.apply_divorce(
+        group_id=GROUP, requester=OTHER, partner=ME, now=time.time()
+    )
+    assert "已离婚" in out.message
+    assert store.get_partner(GROUP, ME) is None
+    assert store.get_partner(GROUP, OTHER) is None
+
+    sent = AsyncMock()
+    monkeypatch.setattr(handle, "_build_and_send", sent)
+    err = await handle._do_draw(bot=MagicMock(), event=_event(OTHER), redraw=False)
+    assert err is None, err
+    row = store.get_daily(GROUP, OTHER, handle._today())
+    assert row is not None
+    assert sent.await_count == 1

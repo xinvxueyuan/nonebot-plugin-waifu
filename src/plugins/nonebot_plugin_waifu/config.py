@@ -62,12 +62,6 @@ class Config(BaseModel):
         le=60,
         description="娶老婆/离婚的二次确认窗口（分钟），默认 3",
     )
-    waifu_divorce_cd_days: int = Field(
-        default=3,
-        ge=0,
-        le=365,
-        description="离婚后发起方的冷却天数，默认 3；0 = 不冷却",
-    )
     waifu_orientation: Literal["normal", "all", "reverse"] = Field(
         default="all",
         description=(
@@ -112,10 +106,6 @@ class Config(BaseModel):
             "监听所有群消息的 matcher 优先级；"
             "**必须大于命令优先级**，否则命令会被监听抢先"
         ),
-    )
-    waifu_left_recently_message: str = Field(
-        default="你刚离过婚，{days} 天后再来吧",
-        description="离婚冷却期内的提示模板；{days} 会被替换为剩余天数",
     )
     waifu_headline_template: str = Field(
         default=DEFAULT_HEADLINE_TEMPLATE,
