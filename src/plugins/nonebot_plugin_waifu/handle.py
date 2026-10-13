@@ -439,6 +439,17 @@ async def _send_notice(
         )
 
 
+def _display_name(group_id: int, user_id: int) -> str:
+    """展示名：库里最近一次发言的昵称 → 退化成 QQ 号（**零 API 调用**）。
+
+    回执图里到处要用「谁」——统一走这里，免得每个 handler 各写一份兜底
+    （历史上就有过「昵称取不到 → 图上只剩 QQ 号」的静默降级）。
+    """
+    row = store.get_member(group_id, user_id)
+    name = str(row["nickname"]).strip() if row is not None else ""
+    return name or str(user_id)
+
+
 @dataclass(frozen=True)
 class MarriageOutcome:
     """一次「娶老婆/离婚」命令的处理结果。"""
@@ -448,6 +459,10 @@ class MarriageOutcome:
     message: str = ""
     partner: int | None = None
     partners: tuple[int, ...] = ()
+    #: **按对象逐个**的状态行 `(user_id, 状态)`：一次 @ 多人时一人一行，
+    #: 全部塞进同一张回执图（用户口径：图里的关联信息必须密集完整）。
+    #: 整体性错误走 `error`，这里只放「这个人怎么了」。
+    lines: tuple[tuple[int, str], ...] = ()
 
 
 def _resolve_target(_event: GroupMessageEvent, args: Message) -> list[int]:
@@ -525,7 +540,10 @@ def apply_marry(
             uniq.append(t)
 
     if not uniq:
-        return MarriageOutcome(error="不能和自己娶老婆")
+        return MarriageOutcome(
+            error="不能和自己娶老婆",
+            lines=tuple((t, "不能娶自己") for t in dict.fromkeys(targets)),
+        )
 
     # 机器人守卫（与「不能娶自己」同一层：目标校验阶段）—— **整条拒绝、全有全无**
     hit_robots = [t for t in uniq if t in robot_qqs]
@@ -536,6 +554,7 @@ def apply_marry(
         return MarriageOutcome(
             error=f"不能娶机器人当老婆（{listed}）",
             partners=tuple(uniq),
+            lines=tuple((t, "不能娶机器人") for t in uniq),
         )
 
     # 上限判定（只查发起方；0 = 不限）—— **整条拒绝、全有全无**
@@ -549,15 +568,31 @@ def apply_marry(
                     "先去「离婚」吧"
                 ),
                 partners=tuple(uniq),
+                lines=tuple(
+                    (t, f"你已经有 {current} 个老婆了（上限 {max_partners}）")
+                    for t in uniq
+                ),
             )
 
     # 单配（max=1）下保留「对方已婚则拒绝」（多配时对方可以已是别人的第 N 个）
     if max_partners == 1:
         for t in uniq:
             if store.is_married(group_id, t):
-                return MarriageOutcome(error=f"{t} 已经有老婆了", partners=tuple(uniq))
+                married_to = store.get_partner(group_id, t)
+                return MarriageOutcome(
+                    error=f"{t} 已经有老婆了",
+                    partners=tuple(uniq),
+                    lines=tuple(
+                        (
+                            u,
+                            f"已经有老婆了（{married_to}）" if u == t else "本次未处理",
+                        )
+                        for u in uniq
+                    ),
+                )
 
     bound_to: int | None = None
+    lines: list[tuple[int, str]] = []
     for t in uniq:
         reverse = store.get_pending(
             group_id, requester=t, partner=requester, kind="marry"
@@ -574,6 +609,7 @@ def apply_marry(
                 )
                 if bound_to is None:
                     bound_to = t
+                lines.append((t, "已绑定"))
                 continue
             store.clear_pending(group_id, requester=t, partner=requester, kind="marry")
         store.set_pending(
@@ -583,6 +619,7 @@ def apply_marry(
             kind="marry",
             requested_at=now,
         )
+        lines.append((t, "等待确认"))
 
     outcome = len(uniq) == 1 and bound_to is not None
     return MarriageOutcome(
@@ -590,6 +627,7 @@ def apply_marry(
         partner=bound_to or uniq[0],
         partners=tuple(uniq),
         message=_format_marry_message(uniq, bound=outcome),
+        lines=tuple(lines),
     )
 
 
@@ -601,12 +639,17 @@ def apply_divorce(
     多配偶下：只能离**自己确实娶了的**那一位（`partner` 必须在 `list_partners` 里）。
     """
     if requester == partner:
-        return MarriageOutcome(error="不能和自己离婚")
+        return MarriageOutcome(
+            error="不能和自己离婚", lines=((partner, "不能和自己离婚"),)
+        )
     my_partners = store.list_partners(group_id, requester)
     if not my_partners:
-        return MarriageOutcome(error="你还没娶老婆")
+        return MarriageOutcome(error="你还没娶老婆", lines=((partner, "你还没娶老婆"),))
     if partner not in my_partners:
-        return MarriageOutcome(error=f"你的老婆是 {my_partners[0]}，不是 {partner}")
+        return MarriageOutcome(
+            error=f"你的老婆是 {my_partners[0]}，不是 {partner}",
+            lines=((partner, f"不是你的老婆（你的老婆是 {my_partners[0]}）"),),
+        )
 
     reverse = store.get_pending(
         group_id, requester=partner, partner=requester, kind="divorce"
@@ -625,6 +668,7 @@ def apply_divorce(
                 bound=False,
                 partner=partner,
                 message="已离婚",
+                lines=((partner, "已离婚"),),
             )
         store.clear_pending(
             group_id, requester=partner, partner=requester, kind="divorce"
@@ -641,6 +685,7 @@ def apply_divorce(
     return MarriageOutcome(
         partner=partner,
         message=f"已申请离婚，{minutes} 分钟内让 ta 回发「离婚 @你」就生效",
+        lines=((partner, "等待确认"),),
     )
 
 
@@ -680,7 +725,7 @@ async def _h_change(bot: Bot, event: GroupMessageEvent) -> None:
 
 
 @confirm_cmd.handle()
-async def _h_confirm(_bot: Bot, event: GroupMessageEvent) -> None:
+async def _h_confirm(bot: Bot, event: GroupMessageEvent) -> None:
     """确认今天的抽取结果。
 
     ⚠️ **只锁自己**（用户 2026-10-10 明确）：锁存在独立的 `waifu_locked` 表，
@@ -692,21 +737,37 @@ async def _h_confirm(_bot: Bot, event: GroupMessageEvent) -> None:
       「已定人」回执，不消耗次数；用户 2026-10-14 起不再复用抽取卡片）。
     - 一天一个：再确认一次会改为锁定**新的那位**（覆盖，不是累加）。
     - 跨天恢复：明天 date_key 变了，锁自然失效。
+    - **两条路径都发回执图**（Task 8A，用户口径：不许再有纯文本回执）：
+      成功 → `notices.confirm_notice`（带当事人资料），
+      还没抽 → `notices.usage_notice`（怎么用，而不是一句错误）。
     """
     gid, me, today = event.group_id, int(event.user_id), _today()
     if not store.lock_daily(gid, me, today):
-        await confirm_cmd.finish(
-            MessageSegment.at(event.user_id)
-            + MessageSegment.text("\n你还没抽今天的，先发「今日老婆」")
+        await _send_notice(
+            bot,
+            event,
+            notices.usage_notice(
+                cmd=CMD_TODAY,
+                lines=("先发「今日老婆」抽一位", "再发「确认老婆」切到对方"),
+            ),
         )
+        return
     row = store.get_daily(gid, me, today)
     partner = int(row["partner_id"]) if row is not None else 0
-    await confirm_cmd.finish(
-        MessageSegment.at(event.user_id)
-        + MessageSegment.text(
-            f"\n已确认 {partner} 为今日老婆，"
-            "今天不能再换（只锁你自己、不影响别人；明天恢复）"
-        )
+    member = store.get_member(gid, partner)
+    await _send_notice(
+        bot,
+        event,
+        notices.confirm_notice(
+            me_name=_display_name(gid, me),
+            partner_id=partner,
+            partner_name=_display_name(gid, partner),
+            last_seen_text=render.format_last_seen(
+                float(member["last_seen"]) if member is not None else None
+            ),
+            used=int(row["draws_used"]) if row is not None else 0,
+            limit=plugin_config.waifu_daily_limit,
+        ),
     )
 
 
@@ -723,15 +784,21 @@ async def _h_marry(
     是机器人（`robot_filter.is_robot`，含本机器人 `self_id`），再把命中的
     组成 `frozenset` 传给 `apply_marry(robot_qqs=...)` —— 保持它仍是纯函数。
     `bot` 形参现在真的被用到了（NoneBot 依赖注入**按注解匹配**，形参名可自由）。
+
+    **回执一律是图**（Task 8A）：无参 → 用法回执；有参 → `marry_notice`，
+    每个目标一行（`out.lines`）、失败原因是 headline。
     """
     targets = _resolve_target(event, args)
     if not targets:
-        await marry_cmd.finish(
-            MessageSegment.at(event.user_id)
-            + MessageSegment.text(
-                "\n用法：娶老婆 @某人（可一次 @ 多人，或 娶老婆 QQ号）"
-            )
+        await _send_notice(
+            bot,
+            event,
+            notices.usage_notice(
+                cmd=CMD_MARRY,
+                lines=("娶老婆 @某人（可一次 @ 多人）", "或 娶老婆 QQ号"),
+            ),
         )
+        return
     out = apply_marry(
         group_id=event.group_id,
         requester=int(event.user_id),
@@ -748,31 +815,59 @@ async def _h_marry(
             if hit
         ),
     )
-    text = out.error or out.message
-    await marry_cmd.finish(
-        MessageSegment.at(event.user_id) + MessageSegment.text(f"\n{text}")
+    me = int(event.user_id)
+    await _send_notice(
+        bot,
+        event,
+        notices.marry_notice(
+            requester_name=_display_name(event.group_id, me),
+            results=out.lines,
+            minutes=plugin_config.waifu_pending_minutes,
+            my_count=store.count_partners(event.group_id, me),
+            cap=plugin_config.waifu_max_partners,
+            failed=out.error,
+        ),
     )
 
 
 @divorce_cmd.handle()
 async def _h_divorce(
-    _bot: Bot, event: GroupMessageEvent, args: Message = CommandArg()
+    bot: Bot, event: GroupMessageEvent, args: Message = CommandArg()
 ) -> None:
+    """「离婚 @某人」：无参 → 用法回执；有参 → `divorce_notice`（图）。
+
+    「申请中」与「已生效」看的是**库里的待确认请求**（不是文案猜测）：
+    完成离婚时双向请求都被清空，所以「还有我方请求」⇔「等对方回发」。
+    """
     targets = _resolve_target(event, args)
     if not targets:
-        await divorce_cmd.finish(
-            MessageSegment.at(event.user_id)
-            + MessageSegment.text("\n用法：离婚 @某人（或 离婚 QQ号）")
+        await _send_notice(
+            bot,
+            event,
+            notices.usage_notice(cmd=CMD_DIVORCE, lines=("离婚 @某人", "或 离婚 QQ号")),
         )
+        return
+    me, partner = int(event.user_id), targets[0]
     out = apply_divorce(
         group_id=event.group_id,
-        requester=int(event.user_id),
-        partner=targets[0],
+        requester=me,
+        partner=partner,
         now=time.time(),
     )
-    text = out.error or out.message
-    await divorce_cmd.finish(
-        MessageSegment.at(event.user_id) + MessageSegment.text(f"\n{text}")
+    pending = not out.error and (
+        store.get_pending(event.group_id, requester=me, partner=partner, kind="divorce")
+        is not None
+    )
+    await _send_notice(
+        bot,
+        event,
+        notices.divorce_notice(
+            partner_id=partner,
+            partner_name=_display_name(event.group_id, partner),
+            pending=pending,
+            minutes=plugin_config.waifu_pending_minutes,
+            failed=out.error,
+        ),
     )
 
 

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
-from .render import NoticeContext
+from .render import NoticeContext, NoticeItem
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 #: 二次确认窗口的措辞（与 `WAIFU_PENDING_MINUTES` 拼成句）
 WAIT_FMT: Final[str] = "等待 ta 回发确认（{minutes} 分钟内有效）"
@@ -83,10 +86,133 @@ def empty_pool_notice() -> NoticeContext:
     )
 
 
+def confirm_notice(
+    *,
+    me_name: str,
+    partner_id: int,
+    partner_name: str,
+    last_seen_text: str,
+    used: int,
+    limit: int,
+) -> NoticeContext:
+    """「确认老婆」成功回执（带当事人资料与锁定范围）。"""
+    return NoticeContext(
+        title="已确认今日老婆",
+        tone="ok",
+        headline=f"{me_name}，你今天的老婆是 {partner_name}",
+        avatar_user_id=partner_id,
+        fields=(
+            ("昵称", partner_name),
+            ("QQ号", str(partner_id)),
+            ("最后发言", last_seen_text),
+            ("状态", "已定人：今天不能再换"),
+            ("影响范围", "只锁你自己（别人仍可能抽到 ta）"),
+            ("今日抽取", f"已用 {used}/{limit} 次"),
+        ),
+        note="明天恢复抽卡",
+    )
+
+
+def marry_notice(
+    *,
+    requester_name: str,
+    results: Sequence[tuple[int, str]],
+    minutes: int,
+    my_count: int,
+    cap: int,
+    failed: str = "",
+) -> NoticeContext:
+    """「娶老婆」回执：**每个对象一行**（可一次 @ 多人）；`failed` 是整体性错误。"""
+    cap_text = f"{my_count}/{cap}" if cap > 0 else f"{my_count}（不限）"
+    return NoticeContext(
+        title="娶老婆" if not failed else "娶老婆没成功",
+        tone="deny" if failed else "ok",
+        headline=failed or f"{requester_name} 的请求已登记",
+        items=tuple(NoticeItem(uid, line) for uid, line in results),
+        fields=(
+            ("确认方式", f"对方回发「娶老婆 @{requester_name}」即绑定"),
+            ("等待窗口", f"{minutes} 分钟内有效"),
+            ("你的老婆数", cap_text),
+        ),
+        note="超过上限、或对方不同意时不会绑定",
+    )
+
+
+def divorce_notice(
+    *,
+    partner_id: int,
+    partner_name: str,
+    pending: bool,
+    minutes: int,
+    failed: str = "",
+) -> NoticeContext:
+    """「离婚」回执（申请中 / 已生效 / 没成功三种）。"""
+    return NoticeContext(
+        title=("离婚申请已登记" if pending else "已离婚")
+        if not failed
+        else "离婚没成功",
+        tone="deny" if failed else ("info" if pending else "ok"),
+        headline=failed or f"与 {partner_name}（{partner_id}）",
+        avatar_user_id=partner_id,
+        items=(
+            NoticeItem(
+                partner_id,
+                # 失败时这一行写**原因**：写「关系已解除」会与「离婚没成功」自相矛盾。
+                failed or ("等待 ta 回发「离婚 @你」确认" if pending else "关系已解除"),
+            ),
+        ),
+        fields=(
+            ("等待窗口", f"{minutes} 分钟内有效" if pending else "—"),
+            ("离婚之后", "可以直接再娶（本插件没有冷却）"),
+        ),
+        note="申请过期不会自动生效，可重新发起",
+    )
+
+
+def usage_notice(*, cmd: str, lines: Sequence[str]) -> NoticeContext:
+    """用法提示（不是错误，是「怎么用」）。"""
+    return NoticeContext(
+        title=f"「{cmd}」怎么用",
+        tone="info",
+        fields=tuple(("步骤", line) for line in lines),
+        note="本插件的回复一律以图片呈现，避免在群里被刷掉",
+    )
+
+
+def graph_empty_notice(*, members: int) -> NoticeContext:
+    """关系图空状态：本群还没有任何关系。"""
+    return NoticeContext(
+        title="本群还没有老婆关系",
+        tone="info",
+        fields=(
+            ("成员池", f"{members} 人（在群里发过言的都算）"),
+            ("图上画什么", "夫妻（无向）与倾心（有向）；只画**已经发生**的关系"),
+        ),
+        note="「娶老婆 @某人」成为夫妻 · 「确认老婆」成为倾心",
+    )
+
+
+def no_relations_notice(*, focus_id: int) -> NoticeContext:
+    """@了人，但 ta 还没有任何关系。"""
+    return NoticeContext(
+        title="ta 还没有任何老婆关系",
+        tone="info",
+        avatar_user_id=focus_id,
+        fields=(("说明", "既没有夫妻、也没有倾心"),),
+        note="等 ta 抽完并「确认老婆」，或「娶老婆 @ta」之后再看",
+    )
+
+
 __all__ = [
     "WAIT_FMT",
     "all_drawn_notice",
+    "confirm_notice",
+    "divorce_notice",
     "empty_pool_notice",
+    "graph_empty_notice",
     "locked_notice",
+    "marry_notice",
+    "no_relations_notice",
     "quota_notice",
+    "usage_notice",
 ]

@@ -232,18 +232,68 @@ def test_quota_message_is_exact():
 
 
 def test_confirm_reply_no_longer_claims_change_skips():
-    """**文案与行为一致**：确认成功文案不再说「换一只时也会跳过」。
+    """**文案与行为一致**：确认成功回执不再说「换一只时也会跳过」。
 
     因为确认后根本不能再换（用户 2026-10-11 新口径）。
+
+    ⚠️ Task 8A 起这条文案是 `notices.confirm_notice()` **编译出来的回执卡**，
+    不再写在 `_h_confirm` 里 —— 所以断言目标改成「用户实际看到的那段文本」
+    （`build_notice_fallback_text`，与图一一对应），比钉源码更贴近行为。
+    """
+    from nonebot_plugin_waifu import notices, render
+
+    ctx = notices.confirm_notice(
+        me_name="甲",
+        partner_id=20002,
+        partner_name="乙",
+        last_seen_text="2026-10-14 00:31",
+        used=1,
+        limit=20,
+    )
+    text = render.build_notice_fallback_text(ctx)
+    assert "换一只时也会跳过" not in text, "确认回执还写着旧行为（换一只会跳过）"
+    assert "不能再换" in text, "确认回执应说明今天不能再换"
+
+
+def test_no_plain_text_reply_left_in_handlers():
+    """**接线守卫（Task 8A）**：回执的纯文本只允许出现在**两处兜底**里。
+
+    用户口径：此插件其余地方也一律用图片代替纯文本（纯文本回执在群里会被刷掉）。
+    所以 `MessageSegment.text(...)` 只允许在
+    `_build_and_send`（抽取卡片渲染失败）与 `_send_notice`(回执卡渲染失败) 里出现；
+    `MessageSegment.at(...)` 只允许在 `_send_notice` 里出现（回执要 @ 到发起人，
+    而抽取卡片**一个 @ 都不许有**）。
+
+    只断言「源码里没有某个字符串」不够 —— 这里按**函数**收集调用点，
+    任何 handler 里新加的纯文本回执都会让这条红。
     """
     src = pathlib.Path("src/plugins/nonebot_plugin_waifu/handle.py").read_text(
         encoding="utf-8"
     )
-    start = src.index("async def _h_confirm")
-    end = src.index("__all__", start)
-    body = src[start:end]
-    assert "换一只时也会跳过" not in body, "确认文案还写着旧行为（换一只会跳过）"
-    assert "不能再换" in body, "确认文案应说明今天不能再换"
+    tree = ast.parse(src)
+
+    def _owners(attr: str) -> set[str]:
+        """收集 `MessageSegment.<attr>(...)` 出现在哪些函数里。"""
+        found: set[str] = set()
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for node in ast.walk(fn):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == attr
+                    and getattr(node.func.value, "id", "") == "MessageSegment"
+                ):
+                    found.add(fn.name)
+        return found
+
+    assert _owners("text") == {"_build_and_send", "_send_notice"}, (
+        "handle.py 里出现了第三处纯文本回复"
+    )
+    assert _owners("at") == {"_send_notice"}, (
+        "handle.py 里只有 _send_notice 允许 @（抽取卡片不许有 @）"
+    )
 
 
 def test_pending_window_is_three_minutes():
