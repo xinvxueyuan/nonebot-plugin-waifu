@@ -9,7 +9,7 @@
     确认老婆            锁定今日老婆，**今天不能再用「换一只」换人**；**只锁自己**
                         （不锁对方），效果是「我之后抽签不会再抽到 ta」；每日恢复。
     娶老婆 @xxx||int      需**双方互相**发「娶老婆 @对方」；窗口 3 分钟；绑定后双方
-                        不再参与他人抽取、也不能再抽群友。
+                        仍照常抽与被抽（用户 2026-10-14：已婚者照常抽）。
     离婚 @xxx||int      同上；离婚后无冷却（用户 2026-10-14 取消，随离随抽）。
 
 配额：一天每人最多 20 次，**所有「抽」都计数**（首次 + 每次换）。超限文案
@@ -243,7 +243,6 @@ async def _pick_eligible(
     my_sex: str | None,
     mode: str,
     excluded: set[int],
-    married: set[int],
     fetch_sex: Callable[[int], Awaitable[str]],
     max_tries: int = 8,
 ) -> rules.Candidate | None:
@@ -266,7 +265,6 @@ async def _pick_eligible(
             my_sex=my_sex,
             mode=mode,
             excluded=tried,
-            married=married,
         )
         if cand is None:
             return None
@@ -296,7 +294,7 @@ async def _do_draw(
     `redraw=True`（换一只）走 `resolve_change_action`，否则走 `resolve_today_action`。
 
     ⚠️ **抽取池不做任何性别筛选**（用户 2026-10-10 口径）：只排除
-    自己 / 今日已锁定者 / **今日已抽到过的人** / 已婚者。性别只在下游渲染时展示 ——
+    自己 / 今日已锁定者 / **今日已抽到过的人**。性别只在下游渲染时展示 ——
     所以这里**没有**「抽中后查性别、不合适就重抽」的循环（那是已删除的死逻辑）。
 
     排除集 = `locked_partners`（确认锁）**并上** `drawn_partners`（当日抽取历史）——
@@ -332,10 +330,6 @@ async def _do_draw(
         )
         return None
 
-    # 已婚者不能再抽
-    if store.is_married(gid, me):
-        return "你已经有老婆了，先「离婚」吧"
-
     mode = plugin_config.waifu_orientation
     pool = [
         rules.Candidate(
@@ -361,13 +355,9 @@ async def _do_draw(
         info = await member_info.fetch_member_info(bot, group_id=gid, user_id=uid)
         return str(info["sex"])
 
-    # 已婚者不能再抽
-    married = store.married_ids(gid)
-
     # 「抽遍了」与「池子本来就没人」要分清：在调用前先算一个**未去重**的可用候选数
-    # （只排除自己 / 已婚者，**不**排除 locked/drawn）。为 0 才是真的没人。
-    # 不为此多加数据库查询 —— 复用已读入的 pool 与上面算出的 married。
-    raw_available = any(c.user_id != me and c.user_id not in married for c in pool)
+    # （只排除自己，**不**排除 locked/drawn）。为 0 才是真的没人。
+    raw_available = any(c.user_id != me for c in pool)
 
     picked = await _pick_eligible(
         pool=pool,
@@ -376,7 +366,6 @@ async def _do_draw(
         mode=mode,
         excluded=store.locked_partners(gid, me, today)
         | store.drawn_partners(gid, me, today),
-        married=married,
         fetch_sex=_fetch_sex,
     )
     if picked is None:

@@ -186,8 +186,8 @@ def test_divorce_only_removes_that_pair():
 
     store.divorce(group_id=GROUP, a=ME, b=OTHER)
     assert store.list_partners(GROUP, ME) == [THIRD]
-    assert THIRD in store.married_ids(GROUP)
-    assert OTHER not in store.married_ids(GROUP)
+    assert store.is_married(GROUP, THIRD)
+    assert not store.is_married(GROUP, OTHER)
 
 
 # --------------------------------------------------------------------------- #

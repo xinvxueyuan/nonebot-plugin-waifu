@@ -42,8 +42,27 @@ def test_normalize_sex():
     assert rules.normalize_sex("whatever") == "unknown"
 
 
-def test_pick_target_excludes_self_locked_and_married():
-    """**只排除**：自己 / 今日已锁定者 / 已婚者。性别**不参与**筛选（用户口径）。"""
+def test_pick_target_no_longer_excludes_married():
+    """已婚者仍在抽取池里（用户 2026-10-14：结婚后双方仍可正常每日抽取老婆）。"""
+    from nonebot_plugin_waifu import rules
+
+    pool = [
+        rules.Candidate(user_id=1, last_seen=1.0),
+        rules.Candidate(user_id=2, last_seen=2.0),
+    ]
+    got = rules.pick_target(
+        pool,
+        me=9,
+        my_sex=None,
+        mode="all",
+        excluded=set(),
+        rng=lambda cands: cands[0],
+    )
+    assert got is not None and got.user_id == 1
+
+
+def test_pick_target_excludes_self_and_locked():
+    """**只排除**：自己 / 今日已锁定者（已婚者不再排除）；性别**不参与**筛选。"""
     from nonebot_plugin_waifu import rules
 
     pool = [
@@ -58,11 +77,10 @@ def test_pick_target_excludes_self_locked_and_married():
         my_sex="unknown",  # mode=all 下不影响；显式写出以免被取向干扰
         mode="all",
         excluded={2},  # 今日已被锁定
-        married={3},  # 已婚
         rng=lambda seq: seq[0],  # 注入 rng：一定挑第一个候选
     )
     assert got is not None
-    assert got.user_id == 4
+    assert got.user_id == 3
 
 
 def test_pick_target_has_orientation_inputs():
@@ -146,9 +164,7 @@ def test_pick_target_filters_by_orientation():
         rules.Candidate(user_id=2, last_seen=1.0, sex="male"),
         rules.Candidate(user_id=3, last_seen=1.0, sex="female"),
     ]
-    got = rules.pick_target(
-        pool, me=1, my_sex="male", mode="normal", excluded=set(), married=set()
-    )
+    got = rules.pick_target(pool, me=1, my_sex="male", mode="normal", excluded=set())
     assert got is not None and got.user_id == 3
 
 
@@ -157,9 +173,7 @@ def test_pick_target_keeps_unknown_sex_candidates():
     from nonebot_plugin_waifu import rules
 
     pool = [rules.Candidate(user_id=2, last_seen=1.0, sex="unknown")]
-    got = rules.pick_target(
-        pool, me=1, my_sex="male", mode="normal", excluded=set(), married=set()
-    )
+    got = rules.pick_target(pool, me=1, my_sex="male", mode="normal", excluded=set())
     assert got is not None and got.user_id == 2
 
 
@@ -167,9 +181,7 @@ def test_pick_target_returns_none_on_empty_pool():
     from nonebot_plugin_waifu import rules
 
     assert (
-        rules.pick_target(
-            [], me=1, my_sex="unknown", mode="all", excluded=set(), married=set()
-        )
+        rules.pick_target([], me=1, my_sex="unknown", mode="all", excluded=set())
         is None
     )
 
@@ -179,9 +191,7 @@ def test_pick_target_never_returns_me():
 
     pool = [rules.Candidate(user_id=1, last_seen=1.0)]
     assert (
-        rules.pick_target(
-            pool, me=1, my_sex="unknown", mode="all", excluded=set(), married=set()
-        )
+        rules.pick_target(pool, me=1, my_sex="unknown", mode="all", excluded=set())
         is None
     )
 
@@ -192,8 +202,7 @@ def test_pick_target_survives_all_excluded():
 
     pool = [rules.Candidate(user_id=2, last_seen=1.0)]
     kw = {"my_sex": "unknown", "mode": "all"}
-    assert rules.pick_target(pool, me=1, excluded={2}, married=set(), **kw) is None
-    assert rules.pick_target(pool, me=1, excluded=set(), married={2}, **kw) is None
+    assert rules.pick_target(pool, me=1, excluded={2}, **kw) is None
 
 
 def test_pending_window_is_three_minutes():

@@ -228,8 +228,7 @@ def test_marry_is_atomic_both_rows_present(tmp_store):
     from nonebot_plugin_waifu import store
 
     store.marry(group_id=100, a=7, b=8)
-    married_ids = store.married_ids(100)
-    assert married_ids == {7, 8}
+    assert store.is_married(100, 7) and store.is_married(100, 8)
 
 
 def test_divorce_clears_both_directions(tmp_store):

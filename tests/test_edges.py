@@ -46,7 +46,6 @@ def test_locked_partner_removed_from_own_draw_today(tmp_store):
         my_sex="unknown",
         mode="all",
         excluded=store.locked_partners(GROUP, ME, "2026-10-10"),
-        married=set(),
     )
     assert got is None
 
@@ -56,9 +55,7 @@ def test_same_sex_can_be_drawn_in_all_mode(tmp_store):
     from nonebot_plugin_waifu import rules
 
     pool = [rules.Candidate(user_id=2, last_seen=1.0, sex="male")]
-    got = rules.pick_target(
-        pool, me=1, my_sex="male", mode="all", excluded=set(), married=set()
-    )
+    got = rules.pick_target(pool, me=1, my_sex="male", mode="all", excluded=set())
     assert got is not None and got.user_id == 2
 
 
@@ -68,9 +65,7 @@ def test_unknown_sex_can_be_drawn_in_any_mode(tmp_store):
 
     for mode in ("normal", "all", "reverse"):
         pool = [rules.Candidate(user_id=2, last_seen=1.0, sex="unknown")]
-        got = rules.pick_target(
-            pool, me=1, my_sex="male", mode=mode, excluded=set(), married=set()
-        )
+        got = rules.pick_target(pool, me=1, my_sex="male", mode=mode, excluded=set())
         assert got is not None, f"mode={mode} 下性别未知者被静默排除了"
 
 

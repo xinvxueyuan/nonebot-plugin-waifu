@@ -51,13 +51,13 @@ def test_marry_blocks_when_already_married():
     assert out.error
 
 
-def test_married_people_cannot_draw():
+def test_marry_marks_both_as_married():
+    """结婚后双方都是「已婚」状态（**不再影响抽取** —— 用户 2026-10-14）。"""
     from nonebot_plugin_waifu import store
 
     store.marry(group_id=GROUP, a=ME, b=OTHER)
     assert store.is_married(GROUP, ME)
     assert store.is_married(GROUP, OTHER)
-    assert ME in store.married_ids(GROUP) and OTHER in store.married_ids(GROUP)
 
 
 def test_binding_clears_pending():

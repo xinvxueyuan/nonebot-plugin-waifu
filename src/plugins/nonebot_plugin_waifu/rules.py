@@ -87,13 +87,6 @@ def can_draw(*, draws_used: int, daily_limit: int) -> DrawCheck:
     return DrawCheck(True)
 
 
-def is_married_already(row_is_married: bool) -> DrawCheck:
-    """已婚的人不能再抽（用户口径：绑定后不能再抽取群友当配偶）。"""
-    if row_is_married:
-        return DrawCheck(False, reason="married", message="你已经有老婆了，先离婚吧")
-    return DrawCheck(True)
-
-
 def normalize_sex(raw: Any) -> str:
     """把各种来源的性别规范成 `male` / `female` / `unknown`。
 
@@ -137,13 +130,14 @@ def pick_target(
     my_sex: str | None,
     mode: str,
     excluded: set[int],
-    married: set[int],
     rng: Callable[[Sequence[Candidate]], Candidate] | None = None,
 ) -> Candidate | None:
-    """从池子里挑一个（**排除自己 / 今日已锁定者 / 已婚者**，再过一遍取向筛）。
+    """从池子里挑一个（**排除自己 / 今日已锁定者**，再过一遍取向筛）。
 
     ⚠️ 取向筛只在 `mode` 为 `normal`/`reverse` 时才有实际效果；`all`（默认）
     下 `is_eligible_gender` 恒 True —— 也就是**不查性别、不过滤**。
+
+    ⚠️ **已婚者不再被排除**（用户 2026-10-14：已婚者照常抽、也照常被抽）。
 
     `rng` 接收**筛完的候选列表**并返回其一 —— 注入它就能确定性断言
     「排除逻辑对不对」，而不是靠随机碰运气。默认 `random.choice`。
@@ -156,7 +150,6 @@ def pick_target(
         for c in pool
         if c.user_id != me
         and c.user_id not in excluded
-        and c.user_id not in married
         and is_eligible_gender(my_sex, c.sex, mode=mode)
     ]
     if not cands:
@@ -185,7 +178,6 @@ __all__ = [
     "can_draw",
     "date_key",
     "is_eligible_gender",
-    "is_married_already",
     "normalize_sex",
     "pending_alive",
     "pick_target",

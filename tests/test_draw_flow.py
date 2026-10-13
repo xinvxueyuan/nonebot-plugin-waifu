@@ -14,7 +14,7 @@ ME = 10001
 OTHER = 20002
 
 
-def _event(user_id: int = ME) -> GroupMessageEvent:
+def _event(user_id: int = ME, group_id: int = GROUP) -> GroupMessageEvent:
     return GroupMessageEvent(
         time=1,
         self_id=3128682634,
@@ -27,7 +27,7 @@ def _event(user_id: int = ME) -> GroupMessageEvent:
         raw_message="",
         font=0,
         sender=Sender(user_id=user_id, nickname=f"u{user_id}", role="member"),
-        group_id=GROUP,
+        group_id=group_id,
     )
 
 
@@ -159,7 +159,6 @@ def test_draw_never_returns_locked_partner():
         my_sex="unknown",
         mode="all",
         excluded=store.locked_partners(GROUP, ME, today),
-        married=store.married_ids(GROUP),
     )
     assert got is None
 
@@ -170,7 +169,6 @@ def test_draw_never_returns_locked_partner():
         my_sex="unknown",
         mode="all",
         excluded=store.locked_partners(GROUP, 30003, today),
-        married=store.married_ids(GROUP),
     )
     assert got_other is not None and got_other.user_id in {ME, OTHER}
 
@@ -206,7 +204,6 @@ def test_pick_eligible_all_mode_skips_sex_and_normal_is_bounded():
             my_sex=None,
             mode="all",
             excluded=set(),
-            married=set(),
             fetch_sex=_sex,
         )
     )
@@ -221,7 +218,6 @@ def test_pick_eligible_all_mode_skips_sex_and_normal_is_bounded():
             my_sex="male",
             mode="normal",
             excluded=set(),
-            married=set(),
             fetch_sex=_sex,
             max_tries=8,
         )
@@ -331,4 +327,30 @@ async def test_divorced_requester_can_draw_immediately(monkeypatch):
     assert err is None, err
     row = store.get_daily(GROUP, OTHER, handle._today())
     assert row is not None
+    assert sent.await_count == 1
+
+
+# --------------------------------------------------------------------------- #
+# A1：已婚者照常抽（用户 2026-10-14）—— 已婚者既不被拦、也不被排除出池子
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_married_can_still_draw(monkeypatch):
+    """已婚者不再被拦、也**不再被排除出抽取池**（用户 2026-10-14）。
+
+    刻意用**只剩一个候选**的池子：若已婚者被排除，池子为空 → 直接报错，
+    任何「把已婚者塞回排除集」的变异都会被这条测试抓住。
+    """
+    from nonebot_plugin_waifu import handle, store
+
+    gid = 998877
+    store.touch_member(group_id=gid, user_id=ME, nickname="甲")
+    store.touch_member(group_id=gid, user_id=OTHER, nickname="乙")
+    store.marry(group_id=gid, a=ME, b=OTHER)  # 两人已婚
+    sent = AsyncMock()
+    monkeypatch.setattr(handle, "_build_and_send", sent)
+
+    err = await handle._do_draw(bot=MagicMock(), event=_event(ME, gid), redraw=False)
+    assert err is None, err
+    row = store.get_daily(gid, ME, handle._today())
+    assert row is not None and int(row["partner_id"]) == OTHER
     assert sent.await_count == 1

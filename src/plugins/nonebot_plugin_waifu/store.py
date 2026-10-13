@@ -473,17 +473,6 @@ def is_married(group_id: int, user_id: int) -> bool:
     return get_partner(group_id, user_id) is not None
 
 
-def married_ids(group_id: int) -> set[int]:
-    """该群所有已婚者（用来把他们从抽取池里排除）。"""
-    with _conn() as conn:
-        rows = conn.execute(
-            f"SELECT user_id FROM {_T_MARRIAGE}"
-            " WHERE group_id = ? AND status = 'married'",
-            (group_id,),
-        ).fetchall()
-        return {int(r["user_id"]) for r in rows}
-
-
 def set_pending(
     *,
     group_id: int,
@@ -553,7 +542,6 @@ __all__ = [
     "list_partners",
     "lock_daily",
     "locked_partners",
-    "married_ids",
     "marry",
     "purge_pending_before",
     "record_drawn",

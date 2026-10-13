@@ -79,12 +79,6 @@ MUTATIONS = [
         "        if True\n        and c.user_id not in excluded",
     ),
     (
-        "M6 抽签不排除已婚",
-        RULES,
-        "        and c.user_id not in married",
-        "        and True",
-    ),
-    (
         "M7 性别未知改成不通过（会让隐藏性别的人静默抽不到）",
         RULES,
         '    if me == "unknown" or cand == "unknown":\n        return True  # 任一方性别隐藏 → 判为通过',
