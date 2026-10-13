@@ -403,6 +403,25 @@ def get_locked_partner(group_id: int, user_id: int, date_key: str) -> int | None
         return int(row["partner_id"]) if row else None
 
 
+def latest_locked_partners(group_id: int) -> dict[int, int]:
+    """每人**最近一次**「确认老婆」的对象 → `{user_id: partner_id}`。
+
+    关系图把这条边画成「倾心」（用户 2026-10-14 口径：确认 = 喜欢/倾心对方）。
+    `date_key` 是 `YYYY-MM-DD` 文本 → 字典序即时间序，倒序取每人第一条即可。
+    """
+    with _conn() as conn:
+        rows = conn.execute(
+            f"SELECT user_id, partner_id FROM {_T_LOCK}"
+            " WHERE group_id = ? ORDER BY date_key DESC, created_at DESC",
+            (group_id,),
+        ).fetchall()
+    out: dict[int, int] = {}
+    for r in rows:
+        uid = int(r["user_id"])
+        out.setdefault(uid, int(r["partner_id"]))
+    return out
+
+
 def marry(*, group_id: int, a: int, b: int) -> None:
     """绑定婚姻：**同一事务**写入双向两行（**只处理 a、b 这一对**）。
 
@@ -555,6 +574,7 @@ __all__ = [
     "init",
     "is_initialized",
     "is_married",
+    "latest_locked_partners",
     "list_members",
     "list_partners",
     "lock_daily",

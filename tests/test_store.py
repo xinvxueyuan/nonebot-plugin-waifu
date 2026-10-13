@@ -420,3 +420,18 @@ def test_set_daily_records_drawn(tmp_store):
     assert store.drawn_partners(g, me, day) == {7, 8}
     # 记录历史**不改变**配额语义：仍旧累加 2 次
     assert store.get_daily(g, me, day)["draws_used"] == 2
+
+
+def test_latest_locked_partners_keeps_newest_per_user(tmp_store):
+    """每人只留**最近一次**确认的对象（`date_key` 字典序即时间序）→ 倾心数据源。"""
+    from nonebot_plugin_waifu import store
+
+    store.set_daily(group_id=100, user_id=1, date_key="2026-10-10", partner_id=2)
+    store.lock_daily(100, 1, "2026-10-10")
+    store.set_daily(group_id=100, user_id=1, date_key="2026-10-11", partner_id=3)
+    store.lock_daily(100, 1, "2026-10-11")
+    store.set_daily(group_id=100, user_id=4, date_key="2026-10-11", partner_id=5)
+    store.lock_daily(100, 4, "2026-10-11")
+
+    assert store.latest_locked_partners(100) == {1: 3, 4: 5}
+    assert store.latest_locked_partners(999) == {}
