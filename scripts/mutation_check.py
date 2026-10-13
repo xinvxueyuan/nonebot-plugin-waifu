@@ -19,6 +19,8 @@ PKG = ROOT / "src/plugins/nonebot_plugin_waifu/__init__.py"
 RULES = ROOT / "src/plugins/nonebot_plugin_waifu/rules.py"
 RENDER = ROOT / "src/plugins/nonebot_plugin_waifu/render.py"
 STORE = ROOT / "src/plugins/nonebot_plugin_waifu/store.py"
+RELATIONS = ROOT / "src/plugins/nonebot_plugin_waifu/relations.py"
+NOTICES = ROOT / "src/plugins/nonebot_plugin_waifu/notices.py"
 
 # ⚠️ 不要加 `--no-cov`（本仓未装 pytest-cov，会报 unrecognized arguments）
 TESTS = ["tests/", "-q", "-p", "no:cacheprovider", "-x"]
@@ -139,7 +141,11 @@ MUTATIONS = [
     (
         "M16 把「@」加回结果消息（用户已要求关闭全部 @）",
         HANDLE,
+        # 锚点带上一行 `group_id=event.group_id,`（`_h_graph` 里同文那一处是
+        # `group_id=gid,`）：单行锚点会命中 2 次，被「多命中」整条跳过。
+        "            group_id=event.group_id,\n"
         "            message=Message(MessageSegment.image(png)),",
+        "            group_id=event.group_id,\n"
         "            message=MessageSegment.at(event.user_id) + MessageSegment.image(png),",
     ),
     (
@@ -157,12 +163,6 @@ MUTATIONS = [
         '            f"SELECT partner_id FROM {_T_DAILY}"\n'
         '            " WHERE group_id = ? AND date_key = ? AND locked = 1",\n'
         "            (group_id, date_key),",
-    ),
-    (
-        "M19 换一只忽略已确认锁（确认后还能换人）",
-        HANDLE,
-        "            locked_today=store.has_lock(gid, me, today),",
-        "            locked_today=False,",
     ),
     (
         "M20 换一只忽略当日已抽历史（会重复抽到同一个人）",
@@ -190,8 +190,87 @@ MUTATIONS = [
         "            )\n"
         "            if hit\n"
         "        ),",
-        "        max_partners=plugin_config.waifu_max_partners,\n"
+        "        max_partners=plugin_config.waifu_max_partners,\\n"
         "        robot_qqs=frozenset(),",
+    ),
+    (
+        "MN1 关系图不去重（同一对画两遍）",
+        RELATIONS,
+        "        if pair in seen:\n            continue",
+        "        if False:\n            continue",
+    ),
+    (
+        "MN2 关系图截断失效（大群画出长图）",
+        RELATIONS,
+        "    shown = edges if cap <= 0 else edges[:cap]",
+        "    shown = edges",
+    ),
+    (
+        "MN3 关系图昵称不转义",
+        RENDER,
+        "    name = html_mod.escape(raw or str(node.uid))",
+        "    name = raw or str(node.uid)",
+    ),
+    (
+        "MN4 倾心取成最早一次确认",
+        STORE,
+        '" WHERE group_id = ? ORDER BY date_key DESC, created_at DESC"',
+        '" WHERE group_id = ? ORDER BY date_key ASC, created_at ASC"',
+    ),
+    (
+        "MN5 「确认后」不再早退（回到复用抽取卡片的老路）",
+        HANDLE,
+        "    if locked is not None:",
+        "    if False:",
+    ),
+    (
+        "MN6 「已定人」回执的字段改字（用户口径被改坏）",
+        NOTICES,
+        '            ("状态", "已确认，今天不能再换"),',
+        '            ("状态", "今天已经抽过了"),',
+    ),
+    (
+        "MN7 ego 视图不过滤（@某人 时照样画全图）",
+        RELATIONS,
+        "        keep = tuple(e for e in self.edges if focus in (e.src, e.dst))",
+        "        keep = tuple(self.edges)",
+    ),
+    (
+        "MN8 已婚者又回到抽取池排除集里",
+        HANDLE,
+        # 计划原文用 `store.married_ids(gid)`，该函数已随 e01819c（已婚者照常抽）
+        # 从 store 删除。改成等价的自建集合 —— 行为仍是「把已婚者塞回排除集」；
+        # 沿用不存在的函数只会得到 AttributeError 式的**假捕获**（崩了，而不是
+        # 测出「已婚者被排除」这个行为差异）。
+        "        excluded=store.locked_partners(gid, me, today)\n"
+        "        | store.drawn_partners(gid, me, today),",
+        "        excluded=store.locked_partners(gid, me, today)\n"
+        "        | store.drawn_partners(gid, me, today)\n"
+        "        | {int(uid) for pair in store.list_marriages(gid) for uid in pair[:2]},",
+    ),
+    (
+        "MN9 渲染不可用时不回退文本（命令会变成「没反应」）",
+        HANDLE,
+        # 计划原文是把 `render.render_notice` 的 `return None` 改成 `raise`：
+        # 实测**漏网** —— 流程测试全部把 `render_notice` 换成了替身，真函数没人调。
+        # 改钉同等风险、且**现有测试真的盖到**的点位：渲染失败后的回退文本分支
+        # 被静默跳过（draw_flow / notice_flow / graph_flow 的兜底用例会红）。
+        "    else:\n"
+        "        await bot.send_group_msg(\n"
+        "            group_id=event.group_id,\n"
+        "            message=Message([\n"
+        "                at,\n"
+        "                MessageSegment.text(render.build_notice_fallback_text(ctx)),\n"
+        "            ]),\n"
+        "        )",
+        "    else:\n"
+        "        return  # 变异：渲染不可用时不回退文本（命令没反应）",
+    ),
+    (
+        "MN10 回执卡丢掉字段行（图里没有关联信息）",
+        RENDER,
+        '  <div class="rows">{rows}</div>\n',
+        "  \n",
     ),
 ]
 
