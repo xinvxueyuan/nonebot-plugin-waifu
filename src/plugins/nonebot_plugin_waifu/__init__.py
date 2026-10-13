@@ -5,7 +5,7 @@
 1. **`on_message` catch-all（`block=False`）** —— 唯一职责是给「活跃成员池」记一笔
    （用户要求：不活跃就抽不到）。**必须 `block=False`**：它兜住所有群消息，
    设成 True 会把别的插件全饿死。它**从不**阻断传播、也从不回消息。
-2. **五个命令（`priority` 更小、`block=True`）** 在 `handle.py`。
+2. **六个命令（`priority` 更小、`block=True`）** 在 `handle.py`。
 
 ## 容灾
 

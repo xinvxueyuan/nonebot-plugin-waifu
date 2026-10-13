@@ -7,6 +7,29 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-14
+
+### Added
+
+- 「老婆关系图」命令（可配 `WAIFU_GRAPH_CMD`，默认 `老婆关系图`）：把本群关系画成一张
+  **人物关系图**（htmlkit 渲染）：焦点居中、一度关系环绕、**边上直接写关系名**；
+  `老婆关系图 @某人` 只看 ta 的一度关系，无参看全部。渲染不可用时回退纯文本（无 @）。
+- 「确认老婆」= **倾心**：每人最近一次确认的对象在关系图上显示为「倾心」有向边。
+- **所有回执改为图片**（htmlkit 渲染的「回执卡」）：确认回执带昵称/QQ/最后发言/锁定范围/今日用量，
+  娶老婆与离婚按人头逐行列出状态与窗口，配额/已抽遍/用法/空状态同样出图 ——
+  聊天流里不再有会被刷掉的纯文本；渲染不可用时回退**信息等价**的纯文本。
+
+### Changed
+
+- **已婚者仍可正常每日抽取老婆**（原先已婚会被拦下且被排除出抽取池）。
+- 「确认老婆」之后再发「今日老婆」/「换一只」，回复改为一条明确的「已经定人、今天不能再换」提示，
+  **不再复用抽取结果卡片**。
+
+### Removed
+
+- **离婚冷却惩罚**（原「发起方 3 天内不能再抽」）整体取消：常量、配置项 `WAIFU_DIVORCE_CD_DAYS`、
+  提示模板与相关判定一并删除。
+
 ## [0.2.0] - 2026-10-11
 
 ### Added
@@ -67,6 +90,7 @@
 - 容灾：状态全部落 sqlite（stdlib `sqlite3`），启动时重放并清理过期的待确认请求。
 - 渲染整体失败时回退纯文本（字段一致），不会表现成「命令没反应」。
 
-[Unreleased]: https://github.com/xinvxueyuan/nonebot-plugin-waifu/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/xinvxueyuan/nonebot-plugin-waifu/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/xinvxueyuan/nonebot-plugin-waifu/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/xinvxueyuan/nonebot-plugin-waifu/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/xinvxueyuan/nonebot-plugin-waifu/releases/tag/v0.1.0
