@@ -390,10 +390,16 @@ async def test_send_notice_falls_back_to_equivalent_text(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_today_handler_sends_locked_notice_as_image(monkeypatch):
-    """接线：`_h_today` 必须把 `_do_draw` 返回的回执**真的发出去**（[at, 图]）。"""
+@pytest.mark.parametrize("name", ["_h_today", "_h_change"])
+async def test_draw_handlers_send_locked_notice_as_image(monkeypatch, name):
+    """接线：`_h_today` 与 `_h_change` 都必须把回执**真的发出去**（[at, 图]）。
+
+    两条命令共用 `_do_draw` 的早退，但各自有 3 行「发回执」的胶水 ——
+    任一处漏发，命令就表现成「没反应」（正是本计划要防的静默失效）。
+    """
     from nonebot_plugin_waifu import handle, render, store
 
+    handler = getattr(handle, name)
     store.set_daily(
         group_id=GROUP, user_id=ME, date_key=handle._today(), partner_id=OTHER
     )
@@ -405,7 +411,7 @@ async def test_today_handler_sends_locked_notice_as_image(monkeypatch):
     bot = MagicMock()
     bot.send_group_msg = AsyncMock()
 
-    await handle._h_today(bot=bot, event=_event(ME))
+    await handler(bot=bot, event=_event(ME))
 
     assert sent.await_count == 0
     msg = bot.send_group_msg.await_args.kwargs["message"]
