@@ -32,6 +32,12 @@ DEFAULT_HEADLINE_TEMPLATE: Final[str] = (
 #: （用户 2026-10-10：「换一只是换老婆的可变配置，用于生产」）。
 DEFAULT_CHANGE_CMD: Final[str] = "换老婆"
 
+#: 「老婆关系图」命令词的默认值（用户 2026-10-14 点名；可用 `WAIFU_GRAPH_CMD` 覆盖）。
+DEFAULT_GRAPH_CMD: Final[str] = "老婆关系图"
+
+#: 关系图最多画几条边（大图截断 + 页脚说明）。
+DEFAULT_GRAPH_MAX_EDGES: Final[int] = 20
+
 #: 取向三档的中文写法 → 规范值
 #: （用户用中文表达这三档，`.env` 里写中文不该让插件起不来）。
 _ORIENTATION_ALIASES: Final[dict[str, str]] = {
@@ -80,6 +86,17 @@ class Config(BaseModel):
             "「换老婆」命令词。源码默认「换老婆」；**生产覆盖为「换一只」**"
             "（用户 2026-10-10：换一只是换老婆的可变配置）"
         ),
+    )
+    waifu_graph_cmd: str = Field(
+        default=DEFAULT_GRAPH_CMD,
+        min_length=1,
+        description="「老婆关系图」命令词；默认「老婆关系图」",
+    )
+    waifu_graph_max_edges: int = Field(
+        default=DEFAULT_GRAPH_MAX_EDGES,
+        ge=1,
+        le=60,
+        description="关系图最多画几条关系边，默认 20",
     )
 
     waifu_max_partners: int = Field(
@@ -148,6 +165,8 @@ plugin_config: Config = get_plugin_config(Config)
 __all__ = [
     "COMMAND_PRIORITY",
     "DEFAULT_CHANGE_CMD",
+    "DEFAULT_GRAPH_CMD",
+    "DEFAULT_GRAPH_MAX_EDGES",
     "DEFAULT_HEADLINE_TEMPLATE",
     "DEFAULT_MEMBER_TTL_DAYS",
     "Config",

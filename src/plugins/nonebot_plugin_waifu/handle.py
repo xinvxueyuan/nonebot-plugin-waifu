@@ -36,7 +36,16 @@ from nonebot.adapters.onebot.v11 import (
 )
 from nonebot.params import CommandArg
 
-from . import member_info, notices, render, robot_filter, rules, store
+from . import (
+    layout,
+    member_info,
+    notices,
+    relations,
+    render,
+    robot_filter,
+    rules,
+    store,
+)
 from .config import DEFAULT_HEADLINE_TEMPLATE, plugin_config
 
 if TYPE_CHECKING:
@@ -54,6 +63,9 @@ CMD_DIVORCE: Final[str] = "离婚"
 #: 源码默认「换老婆」；生产 `.env.dev` 写 `WAIFU_CHANGE_CMD=换一只` 即切换。
 CMD_CHANGE: Final[str] = plugin_config.waifu_change_cmd
 
+#: 「老婆关系图」命令词 —— **配置可变**（用户 2026-10-14 点名；默认「老婆关系图」）。
+CMD_GRAPH: Final[str] = plugin_config.waifu_graph_cmd
+
 #: 命令词单一定义处（注册响应器与插件元数据都引它）。
 #: ⚠️ 含配置项，所以是**运行时**求值，不是字面量常量。
 CMD_NAMES: Final[tuple[str, ...]] = (
@@ -62,6 +74,7 @@ CMD_NAMES: Final[tuple[str, ...]] = (
     CMD_CONFIRM,
     CMD_MARRY,
     CMD_DIVORCE,
+    CMD_GRAPH,
 )
 
 PRIORITY: Final[int] = plugin_config.waifu_command_priority
@@ -708,6 +721,13 @@ marry_cmd = on_command(
     block=True,
 )
 divorce_cmd = on_command(CMD_DIVORCE, aliases={"/离婚"}, priority=PRIORITY, block=True)
+graph_cmd = on_command(
+    CMD_GRAPH,
+    # 斜杠别名按配置词拼（别写死字面量）
+    aliases={f"/{CMD_GRAPH}"},
+    priority=PRIORITY,
+    block=True,
+)
 
 
 @today_cmd.handle()
@@ -871,10 +891,62 @@ async def _h_divorce(
     )
 
 
+# ⚠️ 空状态文案**不在 handle 里**：由 `notices.graph_empty_notice()` /
+# `no_relations_notice()` 编译成回执卡（Task 8A），纯文本只在渲染不可用时兜底。
+
+
+@graph_cmd.handle()
+async def _h_graph(
+    bot: Bot, event: GroupMessageEvent, args: Message = CommandArg()
+) -> None:
+    """老婆关系图 [@某人]：无参 = 本群全部；@某人 = 以 ta 为中心的一度关系。"""
+    gid = event.group_id
+    targets = _resolve_target(event, args)
+    focus = targets[0] if targets else None
+    g = relations.build_relations(
+        marriages=store.list_marriages(gid),
+        crushes=store.latest_locked_partners(gid),
+        max_edges=plugin_config.waifu_graph_max_edges,
+    )
+    if not g.edges:
+        await _send_notice(
+            bot, event, notices.graph_empty_notice(members=store.count_members(gid))
+        )
+        return
+    view = g.ego(focus) if focus is not None else g
+    # 无参时 view 就是 g（上面已确认非空），所以只有「@了人、但 ta 没有关系」能进来。
+    if focus is not None and not view.edges:
+        await _send_notice(bot, event, notices.no_relations_notice(focus_id=focus))
+        return
+    nicknames = {int(r["user_id"]): str(r["nickname"]) for r in store.list_members(gid)}
+    clusters = layout.layout_graph(view, focus=focus)
+    avatars = await render.fetch_avatars(layout.node_ids(clusters))
+    png = await render.render_graph(
+        clusters, nicknames=nicknames, avatars=avatars, focus=focus
+    )
+    if png is not None:
+        await bot.send_group_msg(
+            group_id=gid,
+            message=Message(MessageSegment.image(png)),
+        )
+    else:
+        await bot.send_group_msg(
+            group_id=gid,
+            message=Message(
+                MessageSegment.text(
+                    render.build_graph_fallback_text(
+                        view, nicknames=nicknames, focus=focus
+                    )
+                )
+            ),
+        )
+
+
 __all__ = [
     "CMD_CHANGE",
     "CMD_CONFIRM",
     "CMD_DIVORCE",
+    "CMD_GRAPH",
     "CMD_MARRY",
     "CMD_NAMES",
     "CMD_TODAY",
@@ -886,6 +958,7 @@ __all__ = [
     "confirm_cmd",
     "divorce_cmd",
     "format_headline",
+    "graph_cmd",
     "marry_cmd",
     "resolve_change_action",
     "resolve_today_action",

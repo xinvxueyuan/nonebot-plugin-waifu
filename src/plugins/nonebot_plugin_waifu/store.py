@@ -422,6 +422,18 @@ def latest_locked_partners(group_id: int) -> dict[int, int]:
     return out
 
 
+def list_marriages(group_id: int) -> list[tuple[int, int, float]]:
+    """该群全部婚姻**原始行**（每对两行、双向；**不去重** —— 去重归 `relations`）。"""
+    with _conn() as conn:
+        rows = conn.execute(
+            f"SELECT user_id, partner_id, since FROM {_T_MARRIAGE}"
+            " WHERE group_id = ? AND status = 'married'"
+            " ORDER BY since ASC, user_id ASC, partner_id ASC",
+            (group_id,),
+        ).fetchall()
+    return [(int(r["user_id"]), int(r["partner_id"]), float(r["since"])) for r in rows]
+
+
 def marry(*, group_id: int, a: int, b: int) -> None:
     """绑定婚姻：**同一事务**写入双向两行（**只处理 a、b 这一对**）。
 
@@ -575,6 +587,7 @@ __all__ = [
     "is_initialized",
     "is_married",
     "latest_locked_partners",
+    "list_marriages",
     "list_members",
     "list_partners",
     "lock_daily",

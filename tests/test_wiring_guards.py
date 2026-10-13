@@ -28,17 +28,19 @@ def test_watch_matcher_is_non_blocking():
 
 
 def test_every_command_has_nonempty_cmd_name():
-    """五个命令词都在；「换老婆」那个**来自配置**（默认「换老婆」）。"""
+    """六个命令词都在；「换老婆」「老婆关系图」**来自配置**（默认值见 config）。"""
     from nonebot_plugin_waifu import handle
-    from nonebot_plugin_waifu.config import DEFAULT_CHANGE_CMD
+    from nonebot_plugin_waifu.config import DEFAULT_CHANGE_CMD, DEFAULT_GRAPH_CMD
 
     assert handle.CMD_CHANGE == DEFAULT_CHANGE_CMD == "换老婆"
+    assert handle.CMD_GRAPH == DEFAULT_GRAPH_CMD == "老婆关系图"
     assert set(handle.CMD_NAMES) == {
         "今日老婆",
         DEFAULT_CHANGE_CMD,
         "确认老婆",
         "娶老婆",
         "离婚",
+        DEFAULT_GRAPH_CMD,
     }
 
 
@@ -87,7 +89,7 @@ def test_today_command_has_chou_laopo_alias():
 def test_commands_have_slash_prefix_aliases():
     """用户要求加 `/` 前缀别名（生产 COMMAND_START 含空串，两种都能触发）。
 
-    「换老婆」那条是**配置驱动**的 f-string，所以单独断言。
+    「换老婆」「老婆关系图」那两条是**配置驱动**的 f-string，所以单独断言。
     """
     src = pathlib.Path("src/plugins/nonebot_plugin_waifu/handle.py").read_text(
         encoding="utf-8"
@@ -95,6 +97,7 @@ def test_commands_have_slash_prefix_aliases():
     for cmd in ("/今日老婆", "/确认老婆", "/娶老婆", "/离婚"):
         assert f'"{cmd}"' in src, f"缺少别名 {cmd}"
     assert 'aliases={f"/{CMD_CHANGE}"}' in src
+    assert 'aliases={f"/{CMD_GRAPH}"}' in src
 
 
 def test_confirm_does_not_lock_partner():
@@ -256,11 +259,12 @@ def test_confirm_reply_no_longer_claims_change_skips():
 
 
 def test_no_plain_text_reply_left_in_handlers():
-    """**接线守卫（Task 8A）**：回执的纯文本只允许出现在**两处兜底**里。
+    """**接线守卫（Task 8A）**：回执的纯文本只允许出现在**三处兜底**里。
 
     用户口径：此插件其余地方也一律用图片代替纯文本（纯文本回执在群里会被刷掉）。
     所以 `MessageSegment.text(...)` 只允许在
-    `_build_and_send`（抽取卡片渲染失败）与 `_send_notice`(回执卡渲染失败) 里出现；
+    `_build_and_send`（抽取卡片渲染失败）、`_send_notice`（回执卡渲染失败）
+    与 `_h_graph`（关系图渲染失败 → `build_graph_fallback_text`）里出现；
     `MessageSegment.at(...)` 只允许在 `_send_notice` 里出现（回执要 @ 到发起人，
     而抽取卡片**一个 @ 都不许有**）。
 
@@ -288,8 +292,8 @@ def test_no_plain_text_reply_left_in_handlers():
                     found.add(fn.name)
         return found
 
-    assert _owners("text") == {"_build_and_send", "_send_notice"}, (
-        "handle.py 里出现了第三处纯文本回复"
+    assert _owners("text") == {"_build_and_send", "_send_notice", "_h_graph"}, (
+        "handle.py 里出现了兜底之外的纯文本回复"
     )
     assert _owners("at") == {"_send_notice"}, (
         "handle.py 里只有 _send_notice 允许 @（抽取卡片不许有 @）"
