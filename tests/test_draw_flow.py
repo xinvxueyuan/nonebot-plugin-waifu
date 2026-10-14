@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from unittest.mock import AsyncMock, MagicMock
 
 from nonebot.adapters.onebot.v11 import GroupMessageEvent
@@ -276,26 +275,22 @@ def test_do_draw_uses_all_drawn_message_branch():
 async def test_divorced_requester_can_draw_immediately(monkeypatch):
     """离婚后**立刻**就能再抽，不再等 3 天（用户 2026-10-14：取消离婚冷却）。
 
-    刻意让**完成离婚那次的 requester**（OTHER）来抽：旧逻辑把 3 天 CD 挂在
-    这个人头上 —— 冷却只要还在，这条必红。
+    单人离婚（同批口径：无需对方同意）：ME 一句「离婚 @OTHER」当场解除，
+    随后 **ME 自己**立刻抽卡必须成功 —— 冷却只要还在，这条必红。
     """
     from nonebot_plugin_waifu import handle, store
 
     store.marry(group_id=GROUP, a=ME, b=OTHER)
-    # ME 发起 → OTHER 回发确认 → 离婚生效
-    handle.apply_divorce(group_id=GROUP, requester=ME, partner=OTHER, now=time.time())
-    out = handle.apply_divorce(
-        group_id=GROUP, requester=OTHER, partner=ME, now=time.time()
-    )
+    out = handle.apply_divorce(group_id=GROUP, requester=ME, partner=OTHER)
     assert "已离婚" in out.message
     assert store.get_partner(GROUP, ME) is None
     assert store.get_partner(GROUP, OTHER) is None
 
     sent = AsyncMock()
     monkeypatch.setattr(handle, "_build_and_send", sent)
-    err = await handle._do_draw(bot=MagicMock(), event=_event(OTHER), redraw=False)
+    err = await handle._do_draw(bot=MagicMock(), event=_event(ME), redraw=False)
     assert err is None, err
-    row = store.get_daily(GROUP, OTHER, handle._today())
+    row = store.get_daily(GROUP, ME, handle._today())
     assert row is not None
     assert sent.await_count == 1
 

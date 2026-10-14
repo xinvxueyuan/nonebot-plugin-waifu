@@ -212,7 +212,7 @@ async def test_marry_failure_reply_is_an_image():
 
 
 # --------------------------------------------------------------------------- #
-# 离婚：用法 / 申请中 / 已生效 / 失败
+# 离婚：用法 / 一发即离 / 失败（用户 2026-10-14：无需对方同意，单人即时生效）
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
 async def test_divorce_usage_reply_is_an_image():
@@ -225,45 +225,30 @@ async def test_divorce_usage_reply_is_an_image():
     ctx = _ctx_of()
     assert ctx.title == f"「{handle.CMD_DIVORCE}」怎么用"
     assert any("@某人" in str(v) for _k, v in ctx.fields)
+    assert any("无需对方同意" in str(v) for _k, v in ctx.fields)
 
 
 @pytest.mark.asyncio
-async def test_divorce_request_reply_is_an_image():
-    from nonebot_plugin_waifu import handle
+async def test_divorce_is_effective_on_single_request():
+    """**一发即离**：单条命令（对方全程没发任何消息）就出「已离婚」图并当场解除。"""
+    from nonebot_plugin_waifu import handle, store
 
     handle.apply_marry(group_id=GROUP, requester=ME, partner=OTHER, now=100.0)
     handle.apply_marry(group_id=GROUP, requester=OTHER, partner=ME, now=101.0)
+    assert store.get_partner(GROUP, ME) == OTHER
 
     bot = _bot()
     await handle._h_divorce(bot=bot, event=_event(), args=Message(f" {OTHER}"))
 
     _assert_image_reply(bot)
     ctx = _ctx_of()
-    assert ctx.title == "离婚申请已登记"
-    assert ctx.tone == "info"
-    assert [it.user_id for it in ctx.items] == [OTHER]
-
-
-@pytest.mark.asyncio
-async def test_divorce_done_reply_is_an_image():
-    from nonebot_plugin_waifu import handle, store
-
-    handle.apply_marry(group_id=GROUP, requester=ME, partner=OTHER, now=100.0)
-    handle.apply_marry(group_id=GROUP, requester=OTHER, partner=ME, now=101.0)
-
-    # ME 发「离婚 @OTHER」建请求 → OTHER 回发即生效
-    await handle._h_divorce(bot=_bot(), event=_event(), args=Message(f" {OTHER}"))
-    bot = _bot()
-    await handle._h_divorce(bot=bot, event=_event(OTHER), args=Message(f" {ME}"))
-
-    msg = _message(bot)
-    assert [seg.type for seg in msg] == ["at", "image"]
-    assert msg[0].data["qq"] == str(OTHER)  # @ 到这次命令的发起人
-    ctx = _ctx_of()
     assert ctx.title == "已离婚"
     assert ctx.tone == "ok"
+    assert [it.user_id for it in ctx.items] == [OTHER]
+    # 当场生效 + 不留 divorce pending（OLD 双向确认会先回「申请已登记」）
     assert store.get_partner(GROUP, ME) is None
     assert store.get_partner(GROUP, OTHER) is None
+    assert store.get_pending(GROUP, requester=ME, partner=OTHER, kind="divorce") is None
 
 
 @pytest.mark.asyncio

@@ -66,7 +66,7 @@ class Config(BaseModel):
         default=3,
         ge=1,
         le=60,
-        description="娶老婆/离婚的二次确认窗口（分钟），默认 3",
+        description="娶老婆的二次确认窗口（分钟），默认 3",
     )
     waifu_orientation: Literal["normal", "all", "reverse"] = Field(
         default="all",

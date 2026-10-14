@@ -219,7 +219,7 @@ def test_config_defaults_are_the_confirmed_values():
 
     c = Config()
     assert c.waifu_daily_limit == 20  # 一天最多 20 次
-    assert c.waifu_pending_minutes == 3  # 娶老婆/离婚确认窗口 3 分钟
+    assert c.waifu_pending_minutes == 3  # 娶老婆确认窗口 3 分钟
     assert c.waifu_orientation == "all"  # 用户口径：默认「所有」= 不限
     assert c.waifu_match_priority > c.waifu_command_priority
     assert c.waifu_show_quota_in_card is True

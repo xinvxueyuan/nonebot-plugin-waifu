@@ -1,4 +1,8 @@
-"""娶老婆/离婚：双向确认、窗口、绑定后的互斥。"""
+"""娶老婆：双向确认、窗口、绑定后的互斥。
+
+离婚已改「单人即时生效」（无需对方同意）—— 行为测试见 `test_mutation_gaps` /
+`test_notice_flow` / `test_draw_flow`。
+"""
 
 from __future__ import annotations
 

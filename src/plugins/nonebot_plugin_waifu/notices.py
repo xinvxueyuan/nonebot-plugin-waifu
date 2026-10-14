@@ -140,32 +140,33 @@ def marry_notice(
 
 def divorce_notice(
     *,
+    me_name: str,
     partner_id: int,
     partner_name: str,
-    pending: bool,
-    minutes: int,
     failed: str = "",
 ) -> NoticeContext:
-    """「离婚」回执（申请中 / 已生效 / 没成功三种）。"""
+    """「离婚」回执（已生效 / 没成功两种）。
+
+    **单人即时生效**（用户 2026-10-14）：没有「申请中」态、不需要对方回发；
+    成功回执带上**双方昵称**（发起人 + 被离的人）。
+    """
     return NoticeContext(
-        title=("离婚申请已登记" if pending else "已离婚")
-        if not failed
-        else "离婚没成功",
-        tone="deny" if failed else ("info" if pending else "ok"),
-        headline=failed or f"与 {partner_name}（{partner_id}）",
+        title="离婚没成功" if failed else "已离婚",
+        tone="deny" if failed else "ok",
+        headline=failed or f"{me_name} 与 {partner_name}（{partner_id}）已离婚",
         avatar_user_id=partner_id,
         items=(
             NoticeItem(
                 partner_id,
                 # 失败时这一行写**原因**：写「关系已解除」会与「离婚没成功」自相矛盾。
-                failed or ("等待 ta 回发「离婚 @你」确认" if pending else "关系已解除"),
+                failed or "关系已解除",
             ),
         ),
         fields=(
-            ("等待窗口", f"{minutes} 分钟内有效" if pending else "—"),
+            ("生效方式", "单人即可离婚，无需对方同意"),
             ("离婚之后", "可以直接再娶（本插件没有冷却）"),
         ),
-        note="申请过期不会自动生效，可重新发起",
+        note="离婚只解除这一对，其它配偶关系不受影响",
     )
 
 

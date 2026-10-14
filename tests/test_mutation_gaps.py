@@ -9,7 +9,9 @@
   钉「结果消息里绝不允许出现任何 @」，把加回任何 @（抽取人 / 被抽取人）当作变异体。）
 
 （原 **M11**「离婚 CD 给双方」的靶子本身已删 —— 用户 2026-10-14 取消离婚冷却，
-`apply_divorce` 不再写任何冷却，对应的 CD 断言测试一并删除。）
+`apply_divorce` 不再写任何冷却，对应的 CD 断言测试一并删除。同批口径变更：
+**离婚改「单人即时生效」**——不再双向确认，本节继续钉「一发即离、不留 pending、
+校验不放宽」。）
 
 两条都**不依赖真 htmlkit**（`render._load_htmlkit` 是单独抽出来可 monkeypatch 的）。
 """
@@ -23,10 +25,10 @@ from test_draw_flow import GROUP, ME, OTHER
 
 
 # --------------------------------------------------------------------------- #
-# 离婚：双向确认完成后的回执与关系清空（冷却已随 2026-10-14 口径取消）
+# 离婚：**单人即时生效**（用户 2026-10-14：无需对方同意；冷却已取消）
 # --------------------------------------------------------------------------- #
-def test_divorce_completes_with_plain_message(tmp_store):
-    """双向确认完成离婚：回执**只有「已离婚」**（冷却天数文案已取消）。
+def test_divorce_takes_effect_immediately_by_single_request(tmp_store):
+    """**一发即离**：发出「离婚」当场解除关系，**不需要对方回发**任何确认。
 
     这也是**行为级**的「冷却确实没了」：成功后 `apply_divorce` 不得再
     写/提任何冷却（旧文案「已离婚。发起方 3 天内不能再抽老婆」会让这条红）。
@@ -34,30 +36,34 @@ def test_divorce_completes_with_plain_message(tmp_store):
     from nonebot_plugin_waifu import handle, store
 
     store.marry(group_id=GROUP, a=ME, b=OTHER)
-    # 先由 ME 发起（只建 pending，不离婚）
-    out1 = handle.apply_divorce(group_id=GROUP, requester=ME, partner=OTHER, now=100.0)
-    assert out1.bound is False
-    assert store.get_partner(GROUP, ME) == OTHER
-    # OTHER 回发 → 完成离婚
-    out2 = handle.apply_divorce(group_id=GROUP, requester=OTHER, partner=ME, now=110.0)
-    assert out2.message == "已离婚"
-    assert out2.partner == ME
+    out = handle.apply_divorce(group_id=GROUP, requester=ME, partner=OTHER)
 
-    # 双向婚姻行都清掉
+    assert not out.error, out.error
+    assert "已离婚" in out.message
+    assert out.partner == OTHER
+
+    # ① 当场生效：双向两行婚姻都清掉（没有「等对方回发」的中间态）
     assert store.get_partner(GROUP, ME) is None
     assert store.get_partner(GROUP, OTHER) is None
 
+    # ② 不留 divorce pending（双向都查；旧实现会写发起方那条）
+    assert store.get_pending(GROUP, requester=ME, partner=OTHER, kind="divorce") is None
+    assert store.get_pending(GROUP, requester=OTHER, partner=ME, kind="divorce") is None
 
-def test_divorce_expired_window_keeps_marriage(tmp_store):
-    """窗口过期 → 不离婚（`pending_alive` 为假的分支仍要收敛）。"""
+
+def test_divorce_non_partner_is_still_rejected(tmp_store):
+    """③ 校验不放宽：自己 / 没娶过 / 不是自己的老婆 → 一律报错、关系不动。"""
     from nonebot_plugin_waifu import handle, store
 
-    store.marry(group_id=GROUP, a=ME, b=OTHER)
-    handle.apply_divorce(group_id=GROUP, requester=ME, partner=OTHER, now=0.0)
-    # 181 秒 > 180 秒窗口 → 失效
-    handle.apply_divorce(group_id=GROUP, requester=OTHER, partner=ME, now=181.0)
+    # 不能和自己离婚；没娶过也不能离
+    assert handle.apply_divorce(group_id=GROUP, requester=ME, partner=ME).error
+    assert handle.apply_divorce(group_id=GROUP, requester=ME, partner=OTHER).error
 
-    assert store.get_partner(GROUP, ME) == OTHER  # 婚姻仍在
+    # 娶的是 OTHER，@ 第三人 → 报错，且既有婚姻原样保留
+    store.marry(group_id=GROUP, a=ME, b=OTHER)
+    out = handle.apply_divorce(group_id=GROUP, requester=ME, partner=30003)
+    assert out.error, "离的不是自己的老婆也必须报错"
+    assert store.get_partner(GROUP, ME) == OTHER
     assert store.get_partner(GROUP, OTHER) == ME
 
 

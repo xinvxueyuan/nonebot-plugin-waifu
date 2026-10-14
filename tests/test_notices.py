@@ -74,9 +74,7 @@ def test_every_notice_is_renderable_html():
         notices.marry_notice(
             requester_name="甲", results=[(2, "等待确认")], minutes=3, my_count=0, cap=1
         ),
-        notices.divorce_notice(
-            partner_id=2, partner_name="乙", pending=True, minutes=3
-        ),
+        notices.divorce_notice(me_name="甲", partner_id=2, partner_name="乙"),
         notices.usage_notice(cmd="娶老婆", lines=("娶老婆 @某人",)),
         notices.graph_empty_notice(members=107),
         notices.no_relations_notice(focus_id=2),
@@ -153,28 +151,21 @@ def test_confirm_notice_carries_partner_profile():
     assert n.note
 
 
-def test_divorce_notice_covers_pending_done_and_failed():
+def test_divorce_notice_covers_done_and_failed():
+    """离婚回执只剩两态：**已离婚**（双方昵称都带上）/ 失败原因在 headline。"""
     from nonebot_plugin_waifu import notices
 
-    pending = notices.divorce_notice(
-        partner_id=20002, partner_name="乙", pending=True, minutes=3
-    )
-    assert pending.title == "离婚申请已登记"
-    assert pending.tone == "info"
-    assert any("3 分钟" in str(v) for _k, v in pending.fields)
-
-    done = notices.divorce_notice(
-        partner_id=20002, partner_name="乙", pending=False, minutes=3
-    )
+    done = notices.divorce_notice(me_name="甲", partner_id=20002, partner_name="乙")
     assert done.title == "已离婚"
     assert done.tone == "ok"
     assert done.avatar_user_id == 20002
+    assert "甲" in done.headline and "乙" in done.headline  # 双方昵称都在
+    assert any("无需对方同意" in str(v) for _k, v in done.fields)
 
     failed = notices.divorce_notice(
+        me_name="甲",
         partner_id=20002,
         partner_name="乙",
-        pending=False,
-        minutes=3,
         failed="你还没娶老婆",
     )
     assert failed.title == "离婚没成功"

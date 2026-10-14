@@ -10,7 +10,8 @@
                         （不锁对方），效果是「我之后抽签不会再抽到 ta」；每日恢复。
     娶老婆 @xxx||int      需**双方互相**发「娶老婆 @对方」；窗口 3 分钟；绑定后双方
                         仍照常抽与被抽（用户 2026-10-14：已婚者照常抽）。
-    离婚 @xxx||int      同上；离婚后无冷却（用户 2026-10-14 取消，随离随抽）。
+    离婚 @xxx||int      **无需对方同意**：单人发一句即生效（用户 2026-10-14）；
+                        离婚后无冷却（随离随抽）。
     老婆关系图 [@某人]  无参 = 本群全部；@某人 = 以 ta 为中心的一度关系。
 
 配额：一天每人最多 20 次，**所有「抽」都计数**（首次 + 每次换）。超限文案
@@ -645,11 +646,10 @@ def apply_marry(
     )
 
 
-def apply_divorce(
-    *, group_id: int, requester: int, partner: int, now: float
-) -> MarriageOutcome:
-    """处理一次「离婚 @partner」：同样**需双方互相发**；成功后无任何冷却。
+def apply_divorce(*, group_id: int, requester: int, partner: int) -> MarriageOutcome:
+    """处理一次「离婚 @partner」：**单人即时生效**（用户 2026-10-14：无需对方同意）。
 
+    收到请求就当场 `store.divorce`（不再走 `waifu_pending` 双向确认窗口）。
     多配偶下：只能离**自己确实娶了的**那一位（`partner` 必须在 `list_partners` 里）。
     """
     if requester == partner:
@@ -665,41 +665,12 @@ def apply_divorce(
             lines=((partner, f"不是你的老婆（你的老婆是 {my_partners[0]}）"),),
         )
 
-    reverse = store.get_pending(
-        group_id, requester=partner, partner=requester, kind="divorce"
-    )
-    if reverse is not None:
-        ts = float(reverse["requested_at"])
-        if rules.pending_alive(requested_at=ts, now=now):
-            store.divorce(group_id=group_id, a=requester, b=partner)
-            store.clear_pending(
-                group_id, requester=partner, partner=requester, kind="divorce"
-            )
-            store.clear_pending(
-                group_id, requester=requester, partner=partner, kind="divorce"
-            )
-            return MarriageOutcome(
-                bound=False,
-                partner=partner,
-                message="已离婚",
-                lines=((partner, "已离婚"),),
-            )
-        store.clear_pending(
-            group_id, requester=partner, partner=requester, kind="divorce"
-        )
-
-    store.set_pending(
-        group_id=group_id,
-        requester=requester,
-        partner=partner,
-        kind="divorce",
-        requested_at=now,
-    )
-    minutes = plugin_config.waifu_pending_minutes
+    store.divorce(group_id=group_id, a=requester, b=partner)
     return MarriageOutcome(
+        bound=False,
         partner=partner,
-        message=f"已申请离婚，{minutes} 分钟内让 ta 回发「离婚 @你」就生效",
-        lines=((partner, "等待确认"),),
+        message="已离婚",
+        lines=((partner, "已离婚"),),
     )
 
 
@@ -721,6 +692,7 @@ marry_cmd = on_command(
     priority=PRIORITY,
     block=True,
 )
+# 「离婚」：**单人即时生效** —— 发一句即解除，无需对方同意（用户 2026-10-14）。
 divorce_cmd = on_command(CMD_DIVORCE, aliases={"/离婚"}, priority=PRIORITY, block=True)
 graph_cmd = on_command(
     CMD_GRAPH,
@@ -857,15 +829,18 @@ async def _h_divorce(
 ) -> None:
     """「离婚 @某人」：无参 → 用法回执；有参 → `divorce_notice`（图）。
 
-    「申请中」与「已生效」看的是**库里的待确认请求**（不是文案猜测）：
-    完成离婚时双向请求都被清空，所以「还有我方请求」⇔「等对方回发」。
+    **单人即时生效**（用户 2026-10-14）：收到命令就当场解除关系，
+    **不需要对方回发**任何确认 —— 回执里再也没有「申请中」态。
     """
     targets = _resolve_target(event, args)
     if not targets:
         await _send_notice(
             bot,
             event,
-            notices.usage_notice(cmd=CMD_DIVORCE, lines=("离婚 @某人", "或 离婚 QQ号")),
+            notices.usage_notice(
+                cmd=CMD_DIVORCE,
+                lines=("离婚 @某人（无需对方同意）", "或 离婚 QQ号"),
+            ),
         )
         return
     me, partner = int(event.user_id), targets[0]
@@ -873,20 +848,14 @@ async def _h_divorce(
         group_id=event.group_id,
         requester=me,
         partner=partner,
-        now=time.time(),
-    )
-    pending = not out.error and (
-        store.get_pending(event.group_id, requester=me, partner=partner, kind="divorce")
-        is not None
     )
     await _send_notice(
         bot,
         event,
         notices.divorce_notice(
+            me_name=_display_name(event.group_id, me),
             partner_id=partner,
             partner_name=_display_name(event.group_id, partner),
-            pending=pending,
-            minutes=plugin_config.waifu_pending_minutes,
             failed=out.error,
         ),
     )
