@@ -7,6 +7,21 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-14
+
+### Fixed
+
+- **关系名标签压住节点名字**（用户实拍反馈「文字都和图重叠了」）：标签原先写在连线中点、
+  正落在名字带上。改为沿连线 `t=0.40` 再按**法线方向偏移**，绕开名字带；节点名过长时
+  **截断到 6 字**，不再横向盖住图形。
+- **节点被摆在一条直线上**（用户反馈「不要让线在一条直线上，我要的是连线」）：
+  2 成员簇改为**水平对**（两列并排），3 人及以上改为**扇形分布**（hub 在下、
+  关系散在扇面上），不再共线 —— 一眼能看出「谁连谁」。
+- **连线看不清**：连线加粗（4px / 3px），虚线切片 5 → 2；水平边压到中点走，
+  视觉上真正是一条**连线**而不是两段断线。
+- **整图过于冗长**：簇尺寸自动归一化 + 2 成员簇两列并排，同一份数据的图高
+  从 2272px 降到 762px。
+
 ## [0.3.0] - 2026-10-14
 
 ### Added
@@ -90,7 +105,8 @@
 - 容灾：状态全部落 sqlite（stdlib `sqlite3`），启动时重放并清理过期的待确认请求。
 - 渲染整体失败时回退纯文本（字段一致），不会表现成「命令没反应」。
 
-[Unreleased]: https://github.com/xinvxueyuan/nonebot-plugin-waifu/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/xinvxueyuan/nonebot-plugin-waifu/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/xinvxueyuan/nonebot-plugin-waifu/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/xinvxueyuan/nonebot-plugin-waifu/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/xinvxueyuan/nonebot-plugin-waifu/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/xinvxueyuan/nonebot-plugin-waifu/releases/tag/v0.1.0
