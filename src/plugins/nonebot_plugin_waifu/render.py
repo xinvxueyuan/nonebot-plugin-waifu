@@ -465,19 +465,20 @@ _NOTICE_CSS: Final[str] = (
 # 于是色带**恰好**是这条线段。
 # ---------------------------------------------------------------------------
 
-#: 关系图：边只有两种配色（夫妻 = 主题粉实线 / 倾心 = 琥珀虚线）
-_NODE_EDGE_COLOR: Final[dict[str, str]] = {
-    "marriage": "#db2777",  # 夫妻：主题粉、实线粗
-    "crush": "#f59e0b",  # 倾心：琥珀、虚线细
+#: 关系图：边的配色（夫妻 = 主题粉实线 / 倾心 = 琥珀虚线 / 喜欢 = 蓝色虚线）
+_EDGE_COLOR: Final[dict[str, str]] = {
+    "marriage": "#db2777",  # 夫妻：主题粉、实线粗、无箭头（无向）
+    "crush": "#f59e0b",  # 倾心：琥珀、虚线细、箭头指向被倾心的人
+    "like": "#0ea5e9",  # 喜欢：蓝色、虚线细、箭头指向被喜欢的人（与倾心不撞色）
 }
 
-#: 边的主线段宽度（px）：夫妻最粗（4）> 倾心（3）—— 用户实拍：
+#: 边的主线段宽度（px）：夫妻最粗（4）> 倾心/喜欢（3）—— 用户实拍：
 #: 「连线几乎看不见」（旧值统一 3px 且虚线被切成 5 段，每段只有几个像素）。
-_NODE_EDGE_PX: Final[dict[str, int]] = {"marriage": 4, "crush": 3}
+_EDGE_PX: Final[dict[str, int]] = {"marriage": 4, "crush": 3, "like": 3}
 
 #: 虚线切片数：`dashes=2` → 3 切片、**只画首尾两段**，中间那段正好留给关系名 chip
 #: （旧值 5 → 9 切片只画 5 段，段太短看不见）。
-_NODE_EDGE_DASHES: Final[dict[str, int]] = {"marriage": 1, "crush": 2}
+_EDGE_DASHES: Final[dict[str, int]] = {"marriage": 1, "crush": 2, "like": 2}
 
 #: 关系图卡片宽：**比其它卡片宽** —— 2 成员簇要两列并排，而每簇是
 #: `layout.PAIR_SPAN(260) + 节点盒(96) + 两侧 PAD(24*2) = 404px`，两簇 808px；
@@ -486,8 +487,19 @@ GRAPH_CARD_WIDTH: Final[int] = 880
 #: 关系图的渲染上限宽：必须 ≥ 卡片宽 + body padding（16*2），否则内容被压扁。
 GRAPH_MAX_WIDTH: Final[int] = 920
 
-#: 边上直接写的关系名；`倾心→` 让「谁倾心谁」在图上可读（用户口径：能看出方向）
-_EDGE_LABEL: Final[dict[str, str]] = {"marriage": "夫妻", "crush": "倾心→"}
+#: 边上直接写的关系名。**不再靠「→」字符表方向**（用户 2026-10-14：「倾心→」不够明确）
+#: —— 方向由 dst 端的**真箭头**承担（`layout._arrow_wings`）。夫妻无向，没有箭头。
+_EDGE_LABEL: Final[dict[str, str]] = {
+    "marriage": "夫妻",
+    "crush": "倾心",
+    "like": "喜欢",
+}
+
+#: 图例（图 footer 与纯文本回退**共用同一条**，别写两遍）：三种关系 + 箭头含义。
+_GRAPH_LEGEND: Final[str] = (
+    "粉色实线=夫妻（双向） · 琥珀虚线=倾心（箭头指向被倾心的人） · "
+    "蓝色虚线=喜欢（箭头指向被喜欢的人）"
+)
 
 #: 节点名字最多显示几个字符（超出截断 + `…`）：节点盒只有 96px 宽 ≈ 6 个 16px 汉字，
 #: 再长就会折行、压到下面的边和关系名 chip（用户实拍：「后藤一里（烟雨版）」）。
@@ -645,16 +657,16 @@ def _node_html(
 def _cluster_html(
     cluster: ClusterLayout, *, nicknames: dict[int, str], pool: dict[int, str | None]
 ) -> str:
-    """一个簇的 HTML：线段 + 关系名 chip + 节点（绝对定位，坐标来自 layout）。"""
+    """一个簇的 HTML：线段 + 箭头两翼 + 关系名 chip + 节点（坐标来自 layout）。"""
     segs: list[str] = []
     for line in cluster.lines:
-        color = _NODE_EDGE_COLOR.get(line.kind, "#db2777")
+        color = _EDGE_COLOR.get(line.kind, "#db2777")
         segs.append(
             _segment_html(
                 line,
                 color,
-                dashes=_NODE_EDGE_DASHES.get(line.kind, 1),
-                px=_NODE_EDGE_PX.get(line.kind, 3),
+                dashes=_EDGE_DASHES.get(line.kind, 1),
+                px=_EDGE_PX.get(line.kind, 3),
             )
         )
         segs.append(
@@ -665,6 +677,16 @@ def _cluster_html(
                 text=html_mod.escape(_EDGE_LABEL.get(line.kind, line.kind)),
             )
         )
+    # 箭头两翼**永远实线**（dashes=1）：主线是虚线，方向也要看得清。
+    segs.extend(
+        _segment_html(
+            arrow,
+            _EDGE_COLOR.get(arrow.kind, "#db2777"),
+            dashes=1,
+            px=_EDGE_PX.get(arrow.kind, 3),
+        )
+        for arrow in cluster.arrows
+    )
     nodes = "".join(
         _node_html(n, nicknames=nicknames, avatars=pool) for n in cluster.nodes
     )
@@ -717,13 +739,12 @@ def build_graph_html(
         else "本群全部"
     )
     sub = f"{who} · {len(clusters)} 块 · {sum(len(c.lines) for c in clusters)} 条关系"
-    footer = "粉色实线=夫妻 · 橙色虚线=倾心（箭头方向 = 倾心的一方 → 被倾心的人）"
     return _GRAPH_TEMPLATE.format(
         css=_GRAPH_CSS.replace("{card_width}", str(GRAPH_CARD_WIDTH)),
         title=html_mod.escape(title),
         sub=html_mod.escape(sub),
         clusters="".join(rows),
-        footer=html_mod.escape(footer),
+        footer=html_mod.escape(_GRAPH_LEGEND),
     )
 
 
@@ -754,7 +775,7 @@ def build_graph_fallback_text(
     nicknames: dict[int, str],
     focus: int | None = None,
 ) -> str:
-    """纯文本回退（**无 `@`**）。"""
+    """纯文本回退（**无 `@`**；关系说明与图 footer 用同一条 `_GRAPH_LEGEND`）。"""
 
     def name(uid: int) -> str:
         return (nicknames.get(uid) or "").strip() or str(uid)
@@ -763,7 +784,7 @@ def build_graph_fallback_text(
         "老婆关系图" + (f"（以「{name(focus)}」为中心）" if focus else "（本群）"),
         f"共 {len(graph.nodes)} 人 · {len(graph.edges)} 条关系",
     ]
-    for kind, label in (("marriage", "夫妻"), ("crush", "倾心")):
+    for kind, label in (("marriage", "夫妻"), ("crush", "倾心"), ("like", "喜欢")):
         got = [
             f"{name(e.src)} {'与' if kind == 'marriage' else '→'} {name(e.dst)}"
             for e in graph.edges
@@ -771,6 +792,7 @@ def build_graph_fallback_text(
         ]
         if got:
             lines.append(f"{label}：" + "，".join(got))
+    lines.append(_GRAPH_LEGEND)
     if len(graph.edges) < graph.total_edges:
         lines.append(f"（还有 {graph.total_edges - len(graph.edges)} 条未显示）")
     return "\n".join(lines)[:1200]

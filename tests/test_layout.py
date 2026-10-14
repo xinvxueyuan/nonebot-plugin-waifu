@@ -1,6 +1,11 @@
-"""关系图布局纯函数：2 成员水平对 / ≥3 成员扇形、坐标确定、不越界、chip 不压名字。"""
+"""关系图布局纯函数：2 成员水平对 / ≥3 成员扇形、坐标确定、不越界、chip 不压名字。
+
+（2026-10-14 二：有向边 dst 端加**真箭头**两翼 + 同对有向双线错开，见文件末尾。）
+"""
 
 from __future__ import annotations
+
+import math
 
 
 def _mk(*edges):
@@ -189,3 +194,147 @@ def test_no_label_chip_covers_a_name_band_in_any_shape():
                     assert not _overlaps(chip, _name_band(lay, box)), (
                         f"chip 压在 uid={box.uid} 的名字带上"
                     )
+
+
+# --------------------------------------------------------------------------- #
+# 用户 2026-10-14（二）：「倾心→」文字标签不够明确 → 方向改由 dst 端**真箭头**承担；
+# 新增「喜欢」（抽到每日老婆即喜欢，无需确认）—— 同样有箭头；同对有向双线错开。
+# --------------------------------------------------------------------------- #
+def _dg(*edges):
+    """手工构 `RelationGraph`（`kind` 可直接用 `like` 字面量）。"""
+    from nonebot_plugin_waifu import relations
+
+    es = tuple(relations.RelationEdge(int(a), int(b), kind) for a, b, kind in edges)
+    return relations.RelationGraph(
+        edges=es,
+        nodes=tuple(sorted({m for e in es for m in (e.src, e.dst)})),
+        total_edges=len(es),
+    )
+
+
+def _dist(p, q):
+    return math.hypot(p[0] - q[0], p[1] - q[1])
+
+
+def _ends(line):
+    """线段两端点：bbox 只有正数、方向丢了 —— 用 `angle` 把符号还回来。"""
+    rad = math.radians(line.angle)
+    cx, cy = line.x + line.w / 2, line.y + line.h / 2
+    half = math.hypot(line.w, line.h) / 2
+    return (cx - math.cos(rad) * half, cy - math.sin(rad) * half), (
+        cx + math.cos(rad) * half,
+        cy + math.sin(rad) * half,
+    )
+
+
+def _tip_and_far(wing, near):
+    """（尖端, 后端）：离目标节点中心近的那端是尖端，另一端是回折后的后端。"""
+    a, b = _ends(wing)
+    return (a, b) if _dist(a, near) < _dist(b, near) else (b, a)
+
+
+def test_marriage_has_no_arrow_but_crush_and_like_do():
+    """箭头按**有向性**给：夫妻（无向）不画；倾心/喜欢（有向）dst 端画两翼。"""
+    lay = _l()
+    (marriage,) = lay.layout_graph(_dg((1, 2, "marriage")), focus=None)
+    assert marriage.arrows == ()
+    for kind in ("crush", "like"):
+        (cluster,) = lay.layout_graph(_dg((1, 2, kind)), focus=None)
+        assert len(cluster.arrows) == 2, f"{kind} 边应有 dst 端两翼"
+
+
+def test_arrow_wings_are_11px_at_155_degrees_folded_back_from_the_tip():
+    """箭头两翼几何：翼长 ~11px、与主线夹角 ~155°、从尖端**回折**（背离 dst 节点）。"""
+    lay = _l()
+    (cluster,) = lay.layout_graph(_dg((1, 2, "crush")), focus=None)
+    boxes = {n.uid: n for n in cluster.nodes}
+    (line,) = cluster.lines
+    dst = (boxes[2].cx, boxes[2].cy)
+    tips = []
+    for wing in cluster.arrows:
+        tip, far = _tip_and_far(wing, dst)
+        assert abs(_dist(tip, far) - 11) <= 1.5, "翼长应为 ~11px"
+        spread = abs(wing.angle - line.angle) % 360
+        spread = min(spread, 360 - spread)
+        assert abs(spread - 155) <= 1.0, f"翼与主线夹角应 ~155°，实测 {spread:.2f}"
+        assert _dist(far, dst) > _dist(tip, dst), "两翼必须从尖端向后回折"
+        tips.append(tip)
+    assert abs(_dist(tips[0], tips[1])) <= 1.5, "两翼应共用同一个尖端"
+    # 尖端落在主线 dst 端：离目标箱心 AVATAR/2+GAP —— 离头像 14px，**不插进头像**
+    tip = tips[0]
+    assert abs(_dist(tip, dst) - (lay.AVATAR / 2 + lay.GAP)) <= 2
+
+
+def test_arrow_points_at_the_dst_node_not_the_src():
+    """**箭头指向被倾心/被喜欢的人**：两翼的每个端点都更靠近 dst 而不是 src。"""
+    lay = _l()
+    for kind in ("crush", "like"):
+        (cluster,) = lay.layout_graph(_dg((3, 7, kind)), focus=None)
+        boxes = {n.uid: n for n in cluster.nodes}
+        dst = (boxes[7].cx, boxes[7].cy)
+        src = (boxes[3].cx, boxes[3].cy)
+        assert cluster.arrows
+        for wing in cluster.arrows:
+            for point in _ends(wing):
+                assert _dist(point, dst) < _dist(point, src)
+
+
+def test_arrow_wings_stay_clear_of_every_avatar():
+    """箭头不插进任何头像：翼上各点离**每个**节点中心 ≥ 头像半径 + 6px 余量。"""
+    lay = _l()
+    graphs = (
+        _dg((1, 2, "marriage"), (1, 3, "crush"), (1, 4, "like")),
+        _dg((1, 2, "crush"), (2, 1, "like"), (5, 6, "like")),
+    )
+    for g in graphs:
+        for cluster in lay.layout_graph(g, focus=None):
+            centers = [(n.cx, n.cy) for n in cluster.nodes]
+            for wing in cluster.arrows:
+                a, b = _ends(wing)
+                mid = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+                for point in (a, b, mid):
+                    for c in centers:
+                        assert _dist(point, c) >= lay.AVATAR / 2 + 6
+
+
+def test_double_directed_pair_gets_parallel_lines_and_separated_chips():
+    """同一对人的两条有向边：两条线各自垂直错开 ±7px、chip 也跟着错开。
+
+    A→B 倾心 + B→A 喜欢；两条线只隔 14px 而 chip 高 26px，不错开就会互相压住。
+    """
+    lay = _l()
+    (cluster,) = lay.layout_graph(_dg((1, 2, "crush"), (2, 1, "like")), focus=None)
+    assert len(cluster.lines) == 2
+    assert len(cluster.arrows) == 4  # 每条线 dst 端各两翼
+    l1, l2 = cluster.lines
+    assert abs((l1.angle - l2.angle) % 180) < 1e-6  # 共轴（A→B 与 B→A 反向）
+    mid1 = (l1.y + l1.h / 2, l2.y + l2.h / 2)
+    assert abs(abs(mid1[0] - mid1[1]) - 2 * lay.PAIR_LINE_OFFSET) <= 2
+    boxes = {n.uid: n for n in cluster.nodes}
+    axis = (boxes[1].cy + boxes[2].cy) / 2
+    sides = sorted(round((ln.y + ln.h / 2) - axis) for ln in cluster.lines)
+    assert sides[0] < 0 < sides[1], "两条线要分居轴线两侧（一个 +7 一个 −7）"
+    assert abs(abs(sides[0]) - abs(sides[1])) <= 2
+    # 两个 chip：互不重叠，且各自盖住自己那条线（没盖住对面那条）
+    rects = [
+        (ln.label_x, ln.label_y, ln.label_x + lay.CHIP_W, ln.label_y + lay.CHIP_H)
+        for ln in cluster.lines
+    ]
+    assert not _overlaps(rects[0], rects[1]), "同对双线的 chip 互相压住了"
+    for i, ln in enumerate(cluster.lines):
+        own = ln.y + ln.h / 2
+        other = cluster.lines[1 - i].y + cluster.lines[1 - i].h / 2
+        assert rects[i][1] <= own <= rects[i][3]
+        assert not (rects[i][1] <= other <= rects[i][3])
+
+
+def test_single_directed_edge_is_not_offset():
+    """单边不受双线错开影响：偏移 0，线仍穿过两箱心连线的中点。"""
+    lay = _l()
+    for kind in ("crush", "like"):
+        (cluster,) = lay.layout_graph(_dg((1, 2, kind)), focus=None)
+        boxes = {n.uid: n for n in cluster.nodes}
+        (line,) = cluster.lines
+        mid = (line.x + line.w / 2, line.y + line.h / 2)
+        axis = ((boxes[1].cx + boxes[2].cx) / 2, (boxes[1].cy + boxes[2].cy) / 2)
+        assert abs(mid[0] - axis[0]) <= 1.5 and abs(mid[1] - axis[1]) <= 1.5

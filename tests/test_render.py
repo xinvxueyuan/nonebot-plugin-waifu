@@ -292,3 +292,99 @@ def test_graph_card_is_wider_than_the_plain_card():
     assert f"width: {render.GRAPH_CARD_WIDTH}px" in html  # 卡片宽注入进 CSS
     assert ".row { display: block" in html  # 行容器
     assert "display: inline-block" in html  # 簇按 inline-block 排（两列并排）
+
+
+# --------------------------------------------------------------------------- #
+# 用户 2026-10-14（二）：标签不再靠「→」字符表方向（改画真箭头）+ 新关系「喜欢」
+# --------------------------------------------------------------------------- #
+def _manual(*edges):
+    """手工构 `RelationGraph`（`kind` 用字面量，含 `like`）。"""
+    from nonebot_plugin_waifu import relations
+
+    es = tuple(relations.RelationEdge(int(a), int(b), kind) for a, b, kind in edges)
+    return relations.RelationGraph(
+        edges=es,
+        nodes=tuple(sorted({m for e in es for m in (e.src, e.dst)})),
+        total_edges=len(es),
+    )
+
+
+def test_edge_label_table_drops_the_text_arrow_and_adds_like():
+    """「倾心→」里的箭头字符删掉（方向改由图上真箭头表达）；新增「喜欢」。"""
+    from nonebot_plugin_waifu import render
+
+    assert render._EDGE_LABEL == {"marriage": "夫妻", "crush": "倾心", "like": "喜欢"}
+    assert "→" not in "".join(render._EDGE_LABEL.values())
+
+
+def test_like_edge_is_blue_dashed_and_does_not_clash_with_crush():
+    """「喜欢」= 蓝色（#0ea5e9）3px 虚线；夫妻/倾心的配色与线型**不变**。"""
+    from nonebot_plugin_waifu import render
+
+    assert render._EDGE_COLOR["like"] == "#0ea5e9"
+    assert render._EDGE_COLOR["like"] != render._EDGE_COLOR["crush"]
+    assert render._EDGE_PX["like"] == 3
+    assert render._EDGE_DASHES["like"] > 1  # 虚线
+    assert render._EDGE_COLOR["marriage"] == "#db2777"
+    assert render._EDGE_PX["marriage"] == 4 and render._EDGE_DASHES["marriage"] == 1
+    assert render._EDGE_COLOR["crush"] == "#f59e0b"
+    assert render._EDGE_PX["crush"] == 3 and render._EDGE_DASHES["crush"] > 1
+
+
+def test_arrow_wings_are_drawn_solid_in_the_edge_color(monkeypatch):
+    """虚线主线的 dst 端箭头两翼**必须画实线**（dashes=1）、配色/粗细同主线。"""
+    from nonebot_plugin_waifu import layout, render
+
+    (cluster,) = layout.layout_graph(_manual((1, 2, "crush")), focus=None)
+    calls = []
+    real = render._segment_html
+
+    def spy(line, color, *, dashes=1, px=3):
+        calls.append((line, color, dashes, px))
+        return real(line, color, dashes=dashes, px=px)
+
+    monkeypatch.setattr(render, "_segment_html", spy)
+    html = render._cluster_html(cluster, nicknames={}, pool={})
+    arrow_boxes = {(w.x, w.y, w.w, w.h) for w in cluster.arrows}
+    wing_calls = [c for c in calls if (c[0].x, c[0].y, c[0].w, c[0].h) in arrow_boxes]
+    assert len(wing_calls) == 2
+    for _line, color, dashes, px in wing_calls:
+        assert dashes == 1  # 实线：虚线边上的箭头也要看得清
+        assert color == render._EDGE_COLOR["crush"]
+        assert px == render._EDGE_PX["crush"]
+    main_calls = [
+        c for c in calls if (c[0].x, c[0].y, c[0].w, c[0].h) not in arrow_boxes
+    ]
+    assert [c[2] for c in main_calls] == [render._EDGE_DASHES["crush"]]  # 主线仍是虚线
+    assert html.count('class="seg"') == 4  # 虚线 2 段 + 箭头 2 翼
+
+
+def test_graph_footer_and_text_fallback_share_the_new_legend():
+    """图例 footer 与纯文本回退用同一条新图例（三种关系的箭头含义写全）。"""
+    from nonebot_plugin_waifu import layout, render
+
+    legend = (
+        "粉色实线=夫妻（双向） · 琥珀虚线=倾心（箭头指向被倾心的人） · "
+        "蓝色虚线=喜欢（箭头指向被喜欢的人）"
+    )
+    g = _manual((1, 2, "marriage"), (3, 4, "crush"), (5, 6, "like"))
+    html = render.build_graph_html(
+        layout.layout_graph(g, focus=None), nicknames={}, avatars={}
+    )
+    assert legend in html
+    names = {1: "甲", 2: "乙", 3: "丙", 4: "丁", 5: "戊", 6: "己"}
+    text = render.build_graph_fallback_text(g, nicknames=names)
+    assert legend in text
+    assert "夫妻" in text and "倾心" in text and "喜欢" in text
+    assert "倾心→" not in html and "倾心→" not in text
+
+
+def test_like_edge_renders_its_own_color_and_label():
+    """「喜欢」边在 HTML 里用自己的蓝色 + 「喜欢」chip（不是倾心的琥珀/文案）。"""
+    from nonebot_plugin_waifu import layout, render
+
+    g = _manual((1, 2, "like"), (1, 3, "crush"), (1, 4, "marriage"))
+    clusters = layout.layout_graph(g, focus=1)
+    html = render.build_graph_html(clusters, nicknames={}, avatars={})
+    assert "喜欢" in html and "#0ea5e9" in html
+    assert "#f59e0b" in html and "#db2777" in html
