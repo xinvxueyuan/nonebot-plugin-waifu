@@ -435,3 +435,51 @@ def test_latest_locked_partners_keeps_newest_per_user(tmp_store):
 
     assert store.latest_locked_partners(100) == {1: 3, 4: 5}
     assert store.latest_locked_partners(999) == {}
+
+
+def test_latest_drawn_partners_keeps_newest_per_user(tmp_store):
+    """每人只留**最近一次抽取**的 partner（`date_key` 字典序即时间序）→ 喜欢数据源。"""
+    from nonebot_plugin_waifu import store
+
+    store.set_daily(group_id=100, user_id=1, date_key="2026-10-10", partner_id=2)
+    store.set_daily(group_id=100, user_id=1, date_key="2026-10-11", partner_id=3)
+    store.set_daily(group_id=100, user_id=4, date_key="2026-10-11", partner_id=5)
+
+    assert store.latest_drawn_partners(100) == {1: 3, 4: 5}
+    assert store.latest_drawn_partners(999) == {}
+
+
+def test_latest_drawn_partners_isolated_by_group(tmp_store):
+    """按群隔离：别的群的抽取不进本群结果。"""
+    from nonebot_plugin_waifu import store
+
+    store.set_daily(group_id=100, user_id=1, date_key="2026-10-11", partner_id=2)
+    store.set_daily(group_id=200, user_id=1, date_key="2026-10-11", partner_id=9)
+
+    assert store.latest_drawn_partners(100) == {1: 2}
+    assert store.latest_drawn_partners(200) == {1: 9}
+
+
+def test_latest_drawn_partners_follows_last_redraw(tmp_store):
+    """同一天「换一只」后，喜欢对象跟着变成**最后一次**抽到的人。"""
+    from nonebot_plugin_waifu import store
+
+    store.set_daily(group_id=100, user_id=1, date_key="2026-10-11", partner_id=2)
+    store.set_daily(group_id=100, user_id=1, date_key="2026-10-11", partner_id=8)
+
+    assert store.latest_drawn_partners(100) == {1: 8}
+
+
+def test_latest_drawn_partners_is_not_the_locked_source(tmp_store):
+    """抽取即喜欢、确认即倾心：两个来源互不覆盖。
+
+    昨天抽到 2 并确认（倾心 2）、今天抽到 3 但没确认 → 喜欢是 3、倾心仍是 2。
+    """
+    from nonebot_plugin_waifu import store
+
+    store.set_daily(group_id=100, user_id=1, date_key="2026-10-10", partner_id=2)
+    store.lock_daily(100, 1, "2026-10-10")
+    store.set_daily(group_id=100, user_id=1, date_key="2026-10-11", partner_id=3)
+
+    assert store.latest_drawn_partners(100) == {1: 3}
+    assert store.latest_locked_partners(100) == {1: 2}

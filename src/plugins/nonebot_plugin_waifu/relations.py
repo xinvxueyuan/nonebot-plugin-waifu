@@ -1,8 +1,11 @@
-"""群友关系模型（**纯函数层**）：婚姻对 + 倾心 → 关系边。不碰 IO、不读配置。
+"""群友关系模型（**纯函数层**）：婚姻对 + 倾心 + 喜欢 → 关系边。不碰 IO、不读配置。
 
 - 夫妻：`waifu_marriage` **一对存两行**（双向）→ 这里去重成一条**无向**边。
 - 倾心：`waifu_locked` 每人最近一次确认 → 一条**有向**边（src 倾心 dst）。
-- 同一对人同时有夫妻与倾心 → **只画夫妻**（避免重边；用户口径：确认=倾心，夫妻更强）。
+- 喜欢：`waifu_daily` 每人最近一次抽取 → 一条**有向**边（src 喜欢 dst）。
+  抽取即喜欢（用户 2026-10-14 口径），**不需要**确认。
+- 同一对人只留一条边，强的胜：**夫妻 > 倾心 > 喜欢**（用户口径：夫妻最强）。
+  反向的**分开看**：A→B 的喜欢与 B→A 的倾心是两条不同的边，都保留。
 - 节点 = 出现在边里的人；**没关系的成员不进图**。
 """
 
@@ -17,6 +20,7 @@ if TYPE_CHECKING:
 #: 边类型
 KIND_MARRIAGE: Final[str] = "marriage"
 KIND_CRUSH: Final[str] = "crush"
+KIND_LIKE: Final[str] = "like"
 
 #: 一张图最多画几条边（超出的截掉并在页脚说明）。
 DEFAULT_MAX_EDGES: Final[int] = 20
@@ -24,7 +28,7 @@ DEFAULT_MAX_EDGES: Final[int] = 20
 
 @dataclass(frozen=True)
 class RelationEdge:
-    """一条关系边。`kind` 见 `KIND_*`；`crush` 有向、`marriage` 无向。"""
+    """一条关系边。`kind` 见 `KIND_*`；`crush` / `like` 有向、`marriage` 无向。"""
 
     src: int
     dst: int
@@ -36,7 +40,7 @@ class RelationEdge:
 
     @property
     def directed(self) -> bool:
-        return self.kind == KIND_CRUSH
+        return self.kind in (KIND_CRUSH, KIND_LIKE)
 
 
 @dataclass(frozen=True)
@@ -70,16 +74,23 @@ def build_relations(
     *,
     marriages: Iterable[tuple[int, int, float]],
     crushes: Mapping[int, int],
+    likes: Mapping[int, int] | None = None,
     max_edges: int = DEFAULT_MAX_EDGES,
 ) -> RelationGraph:
     """把库里的原始行整理成边集合。
 
+    去重优先级（同一对人只留一条边，强的胜）：**夫妻 > 倾心 > 喜欢**。
+    反向**分开看**：A→B 的喜欢与 B→A 的倾心互不影响，都保留。
+
     Args:
         marriages: `(a, b, since)` 原始行（**含双向两行**），已按 since 升序。
-        crushes: `{user_id: partner_id}`（每人最近一次确认）。
+        crushes: `{user_id: partner_id}`（每人最近一次确认）→ 倾心。
+        likes: `{user_id: partner_id}`（每人最近一次抽取）→ 喜欢；
+            `None`（调用点还没接线）等价空。同一方向已有倾心时不再画喜欢。
         max_edges: 截断上限；`<= 0` 表示不限。
     """
     seen: set[tuple[int, int]] = set()
+    crush_dirs: set[tuple[int, int]] = set()
     edges: list[RelationEdge] = []
     for a, b, _since in marriages:
         x, y = int(a), int(b)
@@ -94,7 +105,13 @@ def build_relations(
         x, y = int(src), int(dst)
         if x == y or (min(x, y), max(x, y)) in seen:
             continue
+        crush_dirs.add((x, y))
         edges.append(RelationEdge(x, y, KIND_CRUSH))
+    for src, dst in sorted((likes or {}).items()):
+        x, y = int(src), int(dst)
+        if x == y or (min(x, y), max(x, y)) in seen or (x, y) in crush_dirs:
+            continue
+        edges.append(RelationEdge(x, y, KIND_LIKE))
     total = len(edges)
     cap = int(max_edges)
     shown = edges if cap <= 0 else edges[:cap]

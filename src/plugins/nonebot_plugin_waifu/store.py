@@ -422,6 +422,31 @@ def latest_locked_partners(group_id: int) -> dict[int, int]:
     return out
 
 
+def latest_drawn_partners(group_id: int) -> dict[int, int]:
+    """每人**最近一次抽取**的每日老婆 → `{user_id: partner_id}`。
+
+    关系图把这条边画成「喜欢」（用户 2026-10-14 口径：抽到即喜欢，**无需**确认）。
+    取每人 `date_key` 最大的一行（字典序即时间序）；同一天换过一只的，那一行
+    的 `partner_id`/`updated_at` 已被 `set_daily` 就地更新 → 留最后一次抽到的人。
+
+    ⚠️ 与 `latest_locked_partners`（倾心）是**两个独立来源**，互不覆盖；
+    同对同方向的去重优先级（倾心 > 喜欢）在 `relations.build_relations` 里。
+    ⚠️ SQL 文本刻意与 `latest_locked_partners` 不同（`updated_at` / `created_at` 之别）——
+    `scripts/mutation_check.py` 的多行锚点命中两处会被判「跳过」→ 门禁假红。
+    """
+    with _conn() as conn:
+        rows = conn.execute(
+            f"SELECT user_id, partner_id FROM {_T_DAILY}"
+            " WHERE group_id = ? ORDER BY date_key DESC, updated_at DESC",
+            (group_id,),
+        ).fetchall()
+    out: dict[int, int] = {}
+    for r in rows:
+        uid = int(r["user_id"])
+        out.setdefault(uid, int(r["partner_id"]))
+    return out
+
+
 def list_marriages(group_id: int) -> list[tuple[int, int, float]]:
     """该群全部婚姻**原始行**（每对两行、双向；**不去重** —— 去重归 `relations`）。"""
     with _conn() as conn:
@@ -586,6 +611,7 @@ __all__ = [
     "init",
     "is_initialized",
     "is_married",
+    "latest_drawn_partners",
     "latest_locked_partners",
     "list_marriages",
     "list_members",
