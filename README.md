@@ -108,7 +108,7 @@ WAIFU_HEADLINE_TEMPLATE={drawer}, 你今天的群幼老婆是 {partner}（{user_
 | `WAIFU_HEADLINE_TEMPLATE` | `{drawer}, 你今天的群友老婆是 {partner}（{user_id}）` | 卡片首行文案；生产覆盖为「群幼」 |
 | `WAIFU_CHANGE_CMD` | `换老婆` | 「换老婆」命令词；**生产覆盖为 `换一只`** |
 | `WAIFU_GRAPH_CMD` | `老婆关系图` | 「老婆关系图」命令词 |
-| `WAIFU_GRAPH_MAX_EDGES` | `20` | 关系图最多画几条关系边（超出截断并在页脚说明） |
+| `WAIFU_GRAPH_MAX_EDGES` | `60` | 关系图最多画几条关系边（超出截断并在页脚说明）；**上限 60** |
 | `WAIFU_SHOW_QUOTA_IN_CARD` | `true` | 卡片上是否显示「今日已用 N/上限 次」 |
 | `WAIFU_MEMBER_TTL_DAYS` | `0` | 活跃度保留天数；0 = 不淘汰 |
 | `WAIFU_MATCH_PRIORITY` | `5` | 活跃度监听 matcher 优先级（必须 > 命令的 3） |

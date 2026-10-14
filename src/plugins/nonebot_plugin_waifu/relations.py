@@ -23,7 +23,9 @@ KIND_CRUSH: Final[str] = "crush"
 KIND_LIKE: Final[str] = "like"
 
 #: 一张图最多画几条边（超出的截掉并在页脚说明）。
-DEFAULT_MAX_EDGES: Final[int] = 20
+#: 与配置默认 `config.DEFAULT_GRAPH_MAX_EDGES` 对齐（60）—— 同一个上限别留两个数：
+#: 生产调用点永远显式传 `plugin_config.waifu_graph_max_edges`，这里只兜住落单调用。
+DEFAULT_MAX_EDGES: Final[int] = 60
 
 
 @dataclass(frozen=True)

@@ -36,7 +36,9 @@ DEFAULT_CHANGE_CMD: Final[str] = "换老婆"
 DEFAULT_GRAPH_CMD: Final[str] = "老婆关系图"
 
 #: 关系图最多画几条边（大图截断 + 页脚说明）。
-DEFAULT_GRAPH_MAX_EDGES: Final[int] = 20
+#: 默认 = **字段上限 60**（用户 2026-10-14 要求：生产全群图去重后 30 条边，
+#: 旧默认 20 会把全群图截掉 —— 想看全图不该还要自己配）。
+DEFAULT_GRAPH_MAX_EDGES: Final[int] = 60
 
 #: 取向三档的中文写法 → 规范值
 #: （用户用中文表达这三档，`.env` 里写中文不该让插件起不来）。
@@ -96,7 +98,7 @@ class Config(BaseModel):
         default=DEFAULT_GRAPH_MAX_EDGES,
         ge=1,
         le=60,
-        description="关系图最多画几条关系边，默认 20",
+        description="关系图最多画几条关系边，默认 60",
     )
 
     waifu_max_partners: int = Field(
