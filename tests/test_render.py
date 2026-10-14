@@ -323,18 +323,24 @@ def test_edge_label_table_drops_the_text_arrow_and_adds_like():
     assert "→" not in "".join(render._EDGE_LABEL.values())
 
 
-def test_like_edge_is_blue_dashed_and_does_not_clash_with_crush():
-    """「喜欢」= 蓝色（#0ea5e9）3px 虚线；夫妻/倾心的配色与线型**不变**。"""
+def test_like_edge_is_blue_solid_and_does_not_clash_with_crush():
+    """「喜欢」= 蓝色（#0ea5e9）3px **实线**；三种关系一律实线（配色/粗细不变）。
+
+    用户 2026-10-14：「wife 插件的虚线的效果很差，都用实线」—— 倾心/喜欢
+    原先的虚线段（`_EDGE_DASHES=4`）取消，颜色仍是唯一区分手段。
+    """
     from nonebot_plugin_waifu import render
 
     assert render._EDGE_COLOR["like"] == "#0ea5e9"
     assert render._EDGE_COLOR["like"] != render._EDGE_COLOR["crush"]
     assert render._EDGE_PX["like"] == 3
-    assert render._EDGE_DASHES["like"] > 1  # 虚线
+    assert render._EDGE_DASHES["like"] == 1  # 实线
     assert render._EDGE_COLOR["marriage"] == "#db2777"
     assert render._EDGE_PX["marriage"] == 4 and render._EDGE_DASHES["marriage"] == 1
     assert render._EDGE_COLOR["crush"] == "#f59e0b"
-    assert render._EDGE_PX["crush"] == 3 and render._EDGE_DASHES["crush"] > 1
+    assert render._EDGE_PX["crush"] == 3 and render._EDGE_DASHES["crush"] == 1
+    # 全表口径：三个 kind 一个不剩地都是实线（别再偷偷加回虚线）
+    assert render._EDGE_DASHES == {"marriage": 1, "crush": 1, "like": 1}
 
 
 def test_ports_render_as_filled_and_hollow_circles_in_the_edge_color():
@@ -387,7 +393,7 @@ def test_graph_footer_and_text_fallback_share_the_new_legend():
     from nonebot_plugin_waifu import layout, render
 
     legend = (
-        "粉色实线=夫妻（双向） · 琥珀虚线=倾心 · 蓝色虚线=喜欢 · "
+        "粉色=夫妻（双向） · 琥珀=倾心 · 蓝色=喜欢 · "
         "有向边两端：实心圆=发起方，空心圆=被指向的一方"
     )
     g = _manual((1, 2, "marriage"), (3, 4, "crush"), (5, 6, "like"))
