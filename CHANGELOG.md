@@ -7,6 +7,54 @@
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-15
+
+### Changed
+
+- **关系图改用 [G6 v4](https://g6.antv.vision/)（AntV）组件库绘制**（用户 2026-10-15：
+  「去找相关的组件库工具来实现」—— 要「王者荣耀英雄关系图那种成熟形态」）：
+  旧实现是 HTML div + `linear-gradient` 硬色带在轴对齐盒子里「假装」斜线（端点/粗细都要
+  反算像素），现在整张图交给组件库画成**真矢量** ——
+  - **头像节点**：`G6` 的 `image` 节点（data URI）+ 3px `#fbcfe8` 外环 + 下方 16px 昵称
+    （超 6 字截断 + `…`，口径不变）；没头像的人用自绘 SVG 粉底圆 + 首字（照旧 `.ph-av`）；
+  - **边**：`line` 边，颜色/粗细仍取 `_EDGE_COLOR` / `_EDGE_PX`（夫妻 4px、倾心/喜欢 3px），
+    一律实线；**端点用 1px 隐藏锚点节点钉在 `layout` 算好的坐标上**（G6 的
+    `startPoint/endPoint` 在 v4.8.25 实测无效，会被裁到节点 bbox 边缘）；
+  - **关系名＝白底胶囊**（用户点名）：圆角 8 + 1px 同色描边 + 14px 同色文字，**随线旋转**
+    （锚点＝底边中点，与旧 `.elab` 的 `transform-origin` 同口径）。G6 的
+    `labelCfg.style.background` 实测被**静默忽略**（白像素 0），所以胶囊是**自绘**的
+    （SVG 位图节点，旋转烘进 SVG）；
+  - **端点圆保留**（用户拍板）：起点实心 / 终点空心、外径一致（12px 圆节点，
+    空心用 9px + 3px 描边），夫妻（无向）依旧没有端口圆。
+- **渲染改成「等就绪旗再截图」**：`render._shot` 新增 `wait_for`（`page.wait_for_function`），
+  关系图入口传 `window.__ready === true` —— G6 是**异步**渲染的（还要等头像解码），
+  不等就会截到一张空卡片。旗子不置位（资产缺失 / JS 抛错）时等超时后回退纯文本，
+  **绝不发空图**。
+- **`assets/g6.min.js`（`@antv/g6` v4.8.25 · MIT · 1,570,257B ·
+  sha256 `cb6283ad…`）随包分发**：htmlrender 走 `set_content`，相对路径的
+  `<script src>` 不生效，所以出图时**内联**进 HTML（一张卡片里只内联一次）。
+  同目录附 `assets/G6-LICENSE.txt`。**仍零新增 Python 依赖。**
+- 关系图渲染层退役：`_segment_html` / `_band_background` / `_padded_box` /
+  `_NODE_TEMPLATE` / `_SEG_TEMPLATE` / `_LABEL_TEMPLATE` / `_PORT_TEMPLATE` /
+  `_node_html` 与 `_GRAPH_CSS` 里的 `.seg/.node/.avatar/.ph-av/.nm/.port/.elab`
+  段全部删除，「一律实线」改由「G6 边数据里没有 `lineDash`」钉住。
+  卡片外框、簇的排布（一簇一个画布、2 成员簇两列并排）、图例、纯文本回退不变。
+
+### Fixed
+
+- **昵称里的 `<` / `</script>` 不再有注入面**：昵称现在画在 canvas 上（不需要 HTML 转义），
+  但整包 JSON 会内联进 `<script>` —— 所以 `<` 一律写成 `\u003c`（变异体 MN3 已改钉此点）。
+- **自绘 SVG 的字体栈转义**：`font-family` 里带裸双引号会让 SVG（XML）解析失败、
+  整张位图**静默不显示**（实测踩过：头像/胶囊全空白）；现在属性值做 XML 转义。
+
+### 测试
+
+- 新增 `tests/test_graph_g6.py`（数据映射纯函数 / 胶囊几何与旋转 / 端口圆外径 /
+  脚本装配与就绪旗 / 注入防护 / 静态资源 sha256 自证）与
+  `tests/test_graph_g6_render.py`（**真 Chromium** 出图 + 逐像素验收：非空白、沿边采样
+  命中边色、头像圆心命中头像色、**把卡片底色改成非白以证明胶囊底真的是白的**、
+  端点圆实心/空心）。
+
 ## [0.6.0] - 2026-10-14
 
 ### Changed

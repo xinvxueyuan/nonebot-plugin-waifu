@@ -24,16 +24,16 @@ from dataclasses import dataclass
 import hashlib
 import html as html_mod
 import logging
-import math
+import pathlib
 from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from .layout import ClusterLayout, EdgeLine, NodeBox
+    from .layout import ClusterLayout
     from .relations import RelationGraph
 
-from .layout import CHIP_H, CHIP_W, PORT_D, label_rotation
+from . import graph_g6
 
 logger = logging.getLogger("nonebot_plugin_waifu")
 
@@ -209,11 +209,48 @@ def _load_renderer() -> Any:
     return html_to_pic
 
 
-async def _shot(html: str, *, width: int, height: int = 100) -> bytes:
+def _load_page_ctx() -> Any:
+    """惰性取 htmlrender 的页面上下文管理器 `get_new_page`（**等待条件**要用它）。
+
+    `html_to_pic` 没有「等页面条件成立再截图」的钩子（只有固定 `wait` 秒数），
+    而 G6 是异步渲染 —— 不等就会截到空图，所以带 `wait_for` 的出图走自己拿 page 的路。
+    """
+    from nonebot_plugin_htmlrender.browser import (  # pyright: ignore[reportMissingImports]
+        get_new_page,
+    )
+
+    return get_new_page
+
+
+#: `wait_for` 的超时（毫秒）：到点就抛 → `render_graph` 回退纯文本（绝不发空图）。
+READY_TIMEOUT_MS: Final[int] = 15_000
+
+
+async def _shot_after(html: str, *, width: int, height: int, wait_for: str) -> bytes:
+    """等 `wait_for` 条件成立后再截图（G6 异步渲染的防「空图」关键）。
+
+    与 `html_to_pic` 同一条管线（`goto` 一个 file:// 起点 → `set_content` →
+    整页截图、`device_scale_factor=1`），只多一步 `page.wait_for_function`。
+    """
+    get_new_page = _load_page_ctx()
+    async with get_new_page(1, viewport={"width": width, "height": height}) as page:
+        await page.goto(pathlib.Path.cwd().as_uri())
+        await page.set_content(html, wait_until="networkidle")
+        await page.wait_for_function(wait_for, timeout=READY_TIMEOUT_MS)
+        return await page.screenshot(full_page=True, type="png")
+
+
+async def _shot(
+    html: str, *, width: int, height: int = 100, wait_for: str | None = None
+) -> bytes:
     """HTML → PNG：视口宽度写死，高度按整页长（`full_page=True`）。
 
     `device_scale_factor=1`：与旧 litehtml 的 1:1 像素输出对齐（不把图放大一倍）。
+    `wait_for`：给「内容不是同步画好」的图用（关系图 = G6 在 JS 里异步渲染）——
+    传了就走 `page.wait_for_function` 的那条路，不传就是原来的 `html_to_pic`。
     """
+    if wait_for is not None:
+        return await _shot_after(html, width=width, height=height, wait_for=wait_for)
     html_to_pic = _load_renderer()
     return await html_to_pic(
         html,
@@ -478,28 +515,25 @@ _NOTICE_CSS: Final[str] = (
 
 
 # ---------------------------------------------------------------------------
-# 关系图：节点 = 头像 + 昵称，边 = `linear-gradient` 硬色带画出的斜线
+# 关系图：**G6 v4 组件库**（AntV）× Chromium 出图
 #
-# 斜线用渐变硬色带画（Chromium 下也能直接 rotate，但色带法能精确控制虚线段数，保留）：
-# （现场探针实测：线上像素数与理论值一致）—— 盒 = 线段的 bbox，色带穿过盒中心，
-# 于是色带**恰好**是这条线段。
+# 2026-10-15 用户拍板：关系图改用组件库画（「去找相关的组件库工具来实现」——
+# 王者荣耀英雄关系页那种成熟形态），旧 HTML div + `linear-gradient` 色带绘制退役。
+# 绘制细节（头像节点 / 端点圆 / 白底胶囊关系名 / 隐藏锚点钉坐标）全在
+# `graph_g6.py` 里，连同「为什么这么做」的实测结论。
+# 本文件只负责：卡片外框 + 簇的排布（一簇一个 G6 容器）+ 图例 + 纯文本回退。
 # ---------------------------------------------------------------------------
 
 #: 关系图：边的配色（夫妻 = 主题粉实线 / 倾心 = 琥珀实线 / 喜欢 = 蓝色实线）
 _EDGE_COLOR: Final[dict[str, str]] = {
-    "marriage": "#db2777",  # 夫妻：主题粉、实线粗、无箭头（无向）
-    "crush": "#f59e0b",  # 倾心：琥珀、实线细、箭头指向被倾心的人
-    "like": "#0ea5e9",  # 喜欢：蓝色、实线细、箭头指向被喜欢的人（与倾心不撞色）
+    "marriage": "#db2777",  # 夫妻：主题粉、粗、无向（没有端口圆）
+    "crush": "#f59e0b",  # 倾心：琥珀、细、指向被倾心的人（端口圆表方向）
+    "like": "#0ea5e9",  # 喜欢：蓝色、细、指向被喜欢的人（与倾心不撞色）
 }
 
 #: 边的主线段宽度（px）：夫妻最粗（4）> 倾心/喜欢（3）—— 用户实拍：
 #: 「连线几乎看不见」（旧值统一 3px 且虚线被切成 5 段，每段只有几个像素）。
 _EDGE_PX: Final[dict[str, int]] = {"marriage": 4, "crush": 3, "like": 3}
-
-#: 2026-10-14 用户反馈：虚线段效果差（像断线），**关系图连线一律实线** —— 三个 kind
-#: 全 1（`_segment_html` 里 `dashes <= 1` 走单段实线）。旧值 crush/like 各 4。
-#: `_segment_html` 的切片机制**保留**（`dashes>1` 仍能画虚线，便于日后复用）。
-_EDGE_DASHES: Final[dict[str, int]] = {"marriage": 1, "crush": 1, "like": 1}
 
 #: 关系图卡片宽：**比其它卡片宽** —— 2 成员簇要两列并排，而每簇是
 #: `layout.PAIR_SPAN(260) + 节点盒(96) + 两侧 PAD(24*2) = 404px`，两簇 808px；
@@ -524,8 +558,9 @@ _GRAPH_LEGEND: Final[str] = (
 )
 
 #: 节点名字最多显示几个字符（超出截断 + `…`）：节点盒只有 96px 宽 ≈ 6 个 16px 汉字，
-#: 再长就会折行、压到下面的边和关系名 chip（用户实拍：「后藤一里（烟雨版）」）。
-NAME_MAX: Final[int] = 6
+#: 再长就会跟旁边的边/关系名胶囊挤在一起（用户实拍：「后藤一里（烟雨版）」）。
+#: 真正干活的是 `graph_g6.truncate_name`（名字现在画在 canvas 上）——这里只留个别名。
+NAME_MAX: Final[int] = graph_g6.NAME_MAX
 
 #: 关系图私有部分（公共段见 `_BASE_CSS`：字体栈/卡片框/标题条**只写一处**）；
 #: `{card_width}` 由 `GRAPH_CARD_WIDTH` 注入（**不能用 `.format()`**，见 _NOTICE_CSS）。
@@ -539,26 +574,12 @@ _GRAPH_CSS: Final[str] = (
   .row { display: block; text-align: center; }
   .cluster { position: relative; margin-bottom: 10px; display: inline-block;
              vertical-align: top; }
-  .cap { font-size: 16px; color: #9d174d; margin-bottom: 4px; }
-  /* 96px = layout.NODE_W / layout.NODE_H（节点盒尺寸）；两处必须一致 */
-  .node { position: absolute; width: 96px; height: 96px; text-align: center; }
-  .avatar { width: 64px; height: 64px; border-radius: 32px; border: 3px solid #fbcfe8;
-            display: block; margin: 0 auto; }
-  .ph-av { display: block; width: 64px; height: 64px; border-radius: 32px;
-           background: #fce7f3; color: #9d174d; font-size: 26px;
-           line-height: 64px; text-align: center; margin: 0 auto; }
-  /* `nowrap`：名字已截到 6 字 + …，再换行就会压到下面的图（单行才好看） */
-  .nm { font-size: 16px; color: #0f172a; line-height: 24px; white-space: nowrap; }
-  .seg { position: absolute; }
-  /* 端口圆（有向边两端）：**起点实心、终点空心** —— 用户 2026-10-14 口径。
-     空心靠 border-box + 白底 + 同色描边，与实心圆**外径一致**。 */
-  .port { position: absolute; box-sizing: border-box; border-radius: 50%; }
-  /* 关系名：**沿线条旋转、底边贴在自己的线上**（Chromium 支持 transform；
-     旋转原点在底边中点 = 线上那个锚点）。 */
-  .elab { position: absolute; box-sizing: border-box; font-size: 14px;
-          line-height: 22px; text-align: center; border-radius: 8px;
-          background: #ffffff; white-space: nowrap;
-          transform-origin: 50% 100%; }
+  /* 簇标题与 G6 容器**都绝对定位到簇左上角**：layout 在顶部留了 PAD(24) 给标题，
+     容器尺寸 = 簇宽高、坐标 1:1，所以标题浮在容器上方那片留白里。cap 在 DOM 里
+     排在容器**之后** → 画在画布之上（别调换顺序）。 */
+  .cap { position: absolute; left: 0; top: 0; width: 100%; text-align: center;
+         font-size: 16px; color: #9d174d; }
+  .gk { position: absolute; left: 0; top: 0; }
 """
 )
 
@@ -569,171 +590,15 @@ _GRAPH_TEMPLATE: Final[str] = """<!DOCTYPE html>
   <div class="sub">{sub}</div>
   {clusters}
   <div class="footer">{footer}</div>
-</div></body></html>"""
-
-_SEG_TEMPLATE: Final[str] = (
-    '<div class="seg" style="left:{x}px;top:{y}px;width:{w}px;height:{h}px;'
-    'background:{bg}"></div>'
-)
-_NODE_TEMPLATE: Final[str] = (
-    '<div class="node" style="left:{x}px;top:{y}px">{avatar}'
-    '<div class="nm">{name}</div></div>'
-)
-_LABEL_TEMPLATE: Final[str] = (
-    '<div class="elab" style="left:{x}px;top:{y}px;width:{w}px;height:{h}px;'
-    'color:{color};border:1px solid {color};transform:rotate({deg}deg)">{text}</div>'
-)
-_PORT_TEMPLATE: Final[str] = (
-    '<div class="port" style="left:{x}px;top:{y}px;width:{d}px;height:{d}px;'
-    '{paint}"></div>'
-)
-#: 空心圆描边宽度（px）：外径与实心圆一致（`PORT_D`），靠 border-box 保证。
-PORT_STROKE: Final[int] = 3
+</div>{script}</body></html>"""
 
 
-def _band_background(w: int, h: int, angle: float, color: str, px: int = 3) -> str:
-    """用 `linear-gradient` 的硬色带画出穿过盒中心的斜线段（不依赖 `transform`）。
+def _cluster_html(cluster: ClusterLayout, *, index: int = 1) -> str:
+    """一个簇的 HTML：**标题 + 一个 G6 容器**（尺寸 = 簇宽高，坐标 1:1）。
 
-    渐变轴取**垂直线段**方向（`angle = atan2(dy, dx)` 的度数），色带放在 50%：
-    色带与线段平行、且穿过盒中心 —— 而盒就是线段的 bbox，所以色带**恰好**是这条线段。
-    色带宽度按渐变线长度换算成百分比：`L = |w·sinθ| + |h·cosθ|`。
+    具体怎么画（节点/边/端口圆/胶囊）全在 `graph_g6.cluster_data`，
+    这里只做卡片层面的排布（`.cap` 绝对定位在顶部留白里，容器铺满簇）。
     """
-    rad = math.radians(angle)
-    length = abs(w * math.sin(rad)) + abs(h * math.cos(rad)) or 1.0
-    half = (px / 2) / length * 100.0
-    lo, hi = 50.0 - half, 50.0 + half
-    return (
-        f"linear-gradient({angle:.2f}deg, transparent {lo:.2f}%, {color} {lo:.2f}%,"
-        f" {color} {hi:.2f}%, transparent {hi:.2f}%)"
-    )
-
-
-def _padded_box(
-    x: int, y: int, w: int, h: int, *, px: int
-) -> tuple[int, int, int, int]:
-    """把线段盒在**法线方向**撑到至少 `px`（保持中心不动）。
-
-    ⚠️ 实测坑：水平/垂直线的 bbox 在法线方向只有 `max(1, ...)` **伪造出的 1px** ——
-    色带的粗细被盒子卡死在 1px，画出来就是一根发丝（用户实拍抱怨过「看不见线」）。
-    斜线本来就有足够余量，这里只对「薄盒子」生效。
-    """
-    pw, ph = max(w, px), max(h, px)
-    return (round(x + (w - pw) / 2), round(y + (h - ph) / 2), pw, ph)
-
-
-def _segment_html(line: EdgeLine, color: str, *, dashes: int = 1, px: int = 3) -> str:
-    """一条边：`dashes=1` 实线；`>1` 拆成虚线段（每段一个小 bbox，共用同一角度）。
-
-    `px` = 主线段粗细（夫妻 4 / 倾心 3）—— 线要真的看得见，别指望「细线也能看出」。
-
-    ⚠️ 备选方案（探针 B FAIL 时）把本函数体换成「沿线段布 3×3px 小方块」即可，
-    入参/返回不变，上层模板不用改。
-    """
-    if dashes <= 1:
-        bx, by, bw, bh = _padded_box(line.x, line.y, line.w, line.h, px=px)
-        return _SEG_TEMPLATE.format(
-            x=bx,
-            y=by,
-            w=bw,
-            h=bh,
-            bg=_band_background(bw, bh, line.angle, color, px),
-        )
-    # 虚线：以**线段中点**为基准向两端量，而不是从 bbox 角上累加 ——
-    # 轴对齐线的 bbox 高/宽是伪造的 1px，从角上累加会让每段虚线错开 1px。
-    rad = math.radians(line.angle)
-    ux, uy = math.cos(rad), math.sin(rad)
-    mx, my = line.x + line.w / 2, line.y + line.h / 2
-    out: list[str] = []
-    slices = dashes * 2 - 1
-    for i in range(slices):
-        if i % 2:  # 奇数片留白 = 虚线间隙（中间那段正好留给 chip）
-            continue
-        t0, t1 = i / slices, (i + 1) / slices
-        c = (t0 + t1) / 2 - 0.5  # 该片中心相对线段中点的参数
-        sw = max(1, round(line.w * (t1 - t0)))
-        sh = max(1, round(line.h * (t1 - t0)))
-        bx, by, bw, bh = _padded_box(
-            round(mx + c * ux * line.w - sw / 2),
-            round(my + c * uy * line.h - sh / 2),
-            sw,
-            sh,
-            px=px,
-        )
-        out.append(
-            _SEG_TEMPLATE.format(
-                x=bx,
-                y=by,
-                w=bw,
-                h=bh,
-                bg=_band_background(bw, bh, line.angle, color, px),
-            )
-        )
-    return "".join(out)
-
-
-def _node_html(
-    node: NodeBox, *, nicknames: dict[int, str], avatars: dict[int, str | None]
-) -> str:
-    raw = (nicknames.get(node.uid) or "").strip()
-    # 名字截断到 `NAME_MAX` 字 + …：节点盒只有 96px 宽，长名字会**折行压到图上**
-    # （用户实拍：「后藤一里（烟雨版）」折成两行、跟关系名 chip 交叠）。
-    if len(raw) > NAME_MAX:
-        raw = f"{raw[:NAME_MAX]}…"
-    name = html_mod.escape(raw or str(node.uid))
-    uri = avatars.get(node.uid)
-    if uri:
-        avatar = f'<img class="avatar" src="{html_mod.escape(uri)}">'
-    else:
-        first = (raw or str(node.uid))[:1]
-        avatar = f'<span class="ph-av">{html_mod.escape(first)}</span>'
-    return _NODE_TEMPLATE.format(x=node.x, y=node.y, avatar=avatar, name=name)
-
-
-def _cluster_html(
-    cluster: ClusterLayout, *, nicknames: dict[int, str], pool: dict[int, str | None]
-) -> str:
-    """一个簇的 HTML：线段 + 端口圆 + 沿线条旋转的关系名 + 节点（坐标来自 layout）。"""
-    segs: list[str] = []
-    for line in cluster.lines:
-        color = _EDGE_COLOR.get(line.kind, "#db2777")
-        segs.append(
-            _segment_html(
-                line,
-                color,
-                dashes=_EDGE_DASHES.get(line.kind, 1),
-                px=_EDGE_PX.get(line.kind, 3),
-            )
-        )
-        segs.append(
-            _LABEL_TEMPLATE.format(
-                x=line.label_x,
-                y=line.label_y,
-                w=CHIP_W,
-                h=CHIP_H,
-                color=color,
-                deg=round(label_rotation(line.angle), 1),
-                text=html_mod.escape(_EDGE_LABEL.get(line.kind, line.kind)),
-            )
-        )
-    # 端口圆：**起点实心、终点空心**（方向不再靠箭头，用户 2026-10-14）。
-    for port in cluster.ports:
-        color = _EDGE_COLOR.get(port.kind, "#db2777")
-        paint = (
-            f"background:{color}"
-            if port.filled
-            else f"background:#ffffff;border:{PORT_STROKE}px solid {color}"
-        )
-        segs.append(
-            _PORT_TEMPLATE.format(
-                x=port.cx - PORT_D // 2,
-                y=port.cy - PORT_D // 2,
-                d=PORT_D,
-                paint=paint,
-            )
-        )
-    nodes = "".join(
-        _node_html(n, nicknames=nicknames, avatars=pool) for n in cluster.nodes
-    )
     cap = (
         f'<div class="cap">{html_mod.escape(cluster.caption)}</div>'
         if cluster.caption
@@ -741,7 +606,8 @@ def _cluster_html(
     )
     return (
         f'<div class="cluster" style="width:{cluster.width}px;'
-        f'height:{cluster.height}px">{cap}{"".join(segs)}{nodes}</div>'
+        f'height:{cluster.height}px">'
+        f"{graph_g6.container_html(index, cluster)}{cap}</div>"
     )
 
 
@@ -767,8 +633,8 @@ def build_graph_html(
             rows.append(f'<div class="row">{"".join(pair_row)}</div>')
             pair_row.clear()
 
-    for cluster in clusters:
-        block = _cluster_html(cluster, nicknames=nicknames, pool=pool)
+    for index, cluster in enumerate(clusters, start=1):
+        block = _cluster_html(cluster, index=index)
         if len(cluster.nodes) == 2:
             pair_row.append(block)
             if len(pair_row) == 2:
@@ -788,6 +654,15 @@ def build_graph_html(
         title=html_mod.escape(title),
         sub=html_mod.escape(sub),
         clusters="".join(rows),
+        # g6.min.js 内联**一次** + 每簇一段初始化（都在卡片末尾，脚本自己置就绪旗）
+        script=graph_g6.build_scripts(
+            clusters,
+            nicknames=nicknames,
+            avatars=pool,
+            colors=_EDGE_COLOR,
+            widths=_EDGE_PX,
+            labels=_EDGE_LABEL,
+        ),
         footer=html_mod.escape(_GRAPH_LEGEND),
     )
 
@@ -799,13 +674,19 @@ async def render_graph(
     avatars: dict[int, str | None] | None = None,
     focus: int | None = None,
 ) -> bytes | None:
-    """渲染关系图 PNG。**任何失败都只 warning 并返回 None**（调用方回退纯文本）。"""
+    """渲染关系图 PNG。**任何失败都只 warning 并返回 None**（调用方回退纯文本）。
+
+    ⚠️ **必须带 `wait_for`**：图是 G6 在 JS 里异步渲染的（还要等头像解码），
+    不等 `window.__ready` 就会截到一张空卡片 —— 这是本方案唯一的实现风险点，
+    测试用像素抽样钉住（见 `tests/test_graph_g6_render.py`）。
+    """
     try:
         return await _shot(
             build_graph_html(
                 clusters, nicknames=nicknames, avatars=avatars, focus=focus
             ),
             width=GRAPH_MAX_WIDTH,
+            wait_for=graph_g6.READY_EXPR,
         )
     except Exception as e:
         logger.warning("关系图渲染失败，回退纯文本: %s: %s", type(e).__name__, e)

@@ -25,6 +25,10 @@ RELATIONS = ROOT / "src/plugins/nonebot_plugin_waifu/relations.py"
 CONFIG = ROOT / "src/plugins/nonebot_plugin_waifu/config.py"
 NOTICES = ROOT / "src/plugins/nonebot_plugin_waifu/notices.py"
 LAYOUT = ROOT / "src/plugins/nonebot_plugin_waifu/layout.py"
+#: 2026-10-15（v0.7.0）：关系图改用 G6 组件库渲染 —— 昵称转义与标签旋转这两个锚点
+#: 原先落在 `render._node_html` / `_LABEL_TEMPLATE`（已随 div 绘制退役），
+#: 现在钉到等价的**新点位**（同一风险、同一行为）。
+GRAPH = ROOT / "src/plugins/nonebot_plugin_waifu/graph_g6.py"
 
 # ⚠️ 不要加 `--no-cov`（本仓未装 pytest-cov，会报 unrecognized arguments）
 TESTS = ["tests/", "-q", "-p", "no:cacheprovider", "-x"]
@@ -232,10 +236,15 @@ MUTATIONS = [
         "    shown = edges",
     ),
     (
-        "MN3 关系图昵称不转义",
-        RENDER,
-        "    name = html_mod.escape(raw or str(node.uid))",
-        "    name = raw or str(node.uid)",
+        "MN3 关系图昵称不转义（昵称里的 </script> 能炸掉整页脚本）",
+        # 旧锚点 `render._node_html` 的 `html_mod.escape(...)` 已随 div 绘制退役；
+        # 新点位 = 等价的注入防护：内联 JSON 里的 `<` 必须写成 `\u003c`。
+        GRAPH,
+        "    return json.dumps(data, ensure_ascii=False, "
+        'separators=(",", ":")).replace(\n'
+        '        "<", "\\\\u003c"\n'
+        "    )",
+        '    return json.dumps(data, ensure_ascii=False, separators=(",", ":"))',
     ),
     (
         "MN4 倾心取成最早一次确认",
@@ -403,9 +412,11 @@ MUTATIONS = [
     ),
     (
         "MN27 标签不旋转（文本不跟随线条）",
-        RENDER,
-        "transform:rotate({deg}deg)",
-        "transform:none",
+        # 旧锚点是 `.elab` 的 `transform:rotate({deg}deg)`（div 绘制已退役）；
+        # 新点位 = 自绘胶囊把旋转烘进 SVG 的那一步。
+        GRAPH,
+        '<g transform="rotate({deg} {gx:.1f} {gy:.1f})">',
+        '<g transform="none">',
     ),
     (
         "MN20 图例丢掉「喜欢」一行（图上多一种线却不说是什么）",

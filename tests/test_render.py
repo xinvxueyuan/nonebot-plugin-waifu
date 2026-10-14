@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import base64
+
+import pytest
+
 
 def _ctx():
     from nonebot_plugin_waifu import render
@@ -195,7 +199,23 @@ def _graph():
     return g, layout.layout_graph(g, focus=1)
 
 
-def test_graph_html_escapes_nicknames_and_draws_nodes():
+def _own_html(html: str) -> str:
+    """卡片标记 + **我们自己的**初始化脚本（剔掉内联的 g6.min.js）。
+
+    ⚠️ 组件库里自带 `http` / `lineDash` / `linear-gradient` 这些词 —— 扫全页会把库的
+    实现当成我们的输出、误判（实测被咬过）。第一个 `</script>` 之前是卡片标记 + 库。
+    """
+    head, _, rest = html.partition("</script>")
+    return head.split("<script>", 1)[0] + rest.replace("<script>", "", 1)
+
+
+def test_graph_html_puts_every_member_on_a_canvas_node():
+    """昵称不再进 DOM（canvas 画字）—— 卡片里只该有容器、数据和内联脚本。
+
+    ⚠️ 断言一律先算成**小值**（计数/列表）再比：卡片 HTML 有 1.5MB，
+    拿它直接参与 `in` / `not in` 断言，一旦失败 pytest 生成解释时会把整页打印出来，
+    实测能把整个测试进程卡死几分钟（踩过一次）。
+    """
     from nonebot_plugin_waifu import render
 
     _g, clusters = _graph()
@@ -204,22 +224,52 @@ def test_graph_html_escapes_nicknames_and_draws_nodes():
         nicknames={1: "甲<b>", 2: "乙", 3: "丙"},
         avatars={1: "data:image/jpeg;base64,AAAA"},
     )
-    assert "<b>" not in html and "甲&lt;b&gt;" in html
-    assert html.count('class="node') == 3
-    assert "data:image/jpeg;base64,AAAA" in html
-    assert 'class="ph-av"' in html  # 没有头像的人用首字占位
-    assert "夫妻" in html and "倾心" in html  # 边上直接写关系名
-    assert "http" not in html  # 绝不出现网络图片 URL
+    mine = _own_html(html)
+    assert mine.count("<b>") == 0  # 昵称不进 HTML（数据里 `<` 转义成 \u003c）
+    assert mine.count("\\u003cb>") == 1
+    assert mine.count('"type":"image"') >= 3  # 三个头像节点（占位也是 image）
+    assert mine.count("data:image/jpeg;base64,AAAA") == 1
+    assert mine.count("data:image/svg+xml;base64,") >= 2  # 没头像的人用自绘占位圆
+    assert mine.count("http") == 0  # 绝不出现网络图片 URL（头像全走 data URI）
 
 
-def test_graph_html_contains_edges_with_gradient_bands():
+def test_graph_html_retires_the_old_div_band_drawing():
+    """旧绘制（色带/绝对定位 div/`.elab` chip）必须整体退役，别留一半。
+
+    ⚠️ 只扫**卡片标记段**（第一个 `<script>` 之前）：内联的 g6.min.js 自带
+    `linear-gradient`（组件库内部的渐变工具），扫全页会误判。
+    """
     from nonebot_plugin_waifu import render
 
     _g, clusters = _graph()
     html = render.build_graph_html(clusters, nicknames={}, avatars={})
-    assert (
-        html.count("linear-gradient") >= 2
-    )  # 主方案；备选方案改断言 <div class="seg">
+    card = html.split("<script>", 1)[0]
+    assert len(card) < 20_000  # 卡片段就是那点标记，别把库扫进来
+    leftovers = [
+        d
+        for d in ("linear-gradient", 'class="seg"', 'class="node"', 'class="elab"')
+        if d in card
+    ]
+    assert leftovers == []
+    assert not hasattr(render, "_segment_html")
+    assert not hasattr(render, "_band_background")
+    assert not hasattr(render, "_node_html")
+    assert not hasattr(render, "_LABEL_TEMPLATE")
+
+
+def test_graph_html_embeds_one_g6_container_per_cluster_and_the_library_once():
+    from nonebot_plugin_waifu import render
+
+    _g, clusters = _graph()
+    html = render.build_graph_html(clusters, nicknames={}, avatars={})
+    assert html.count('class="gk"') == len(clusters) == 1
+    assert 'id="g6-1"' in html
+    assert html.count("<script>") == 2  # 内联的 g6.min.js + 我们自己的初始化脚本
+    assert html.count("new G6.Graph(") == 1  # 一簇一个 Graph 实例
+    # 就绪旗：G6 异步渲染，不置位就会截到空图（render_graph 靠它等）
+    assert "window.__ready = true" in html
+    assert html.count("<script src") == 0
+    assert html.count("assets/g6.min.js") == 0  # 路径不该出现（内容已内联）
 
 
 def test_graph_fallback_text_has_no_at_and_lists_relations():
@@ -273,17 +323,23 @@ def test_big_cluster_gets_its_own_row():
 
 
 def test_node_name_is_truncated_to_six_chars():
-    """长名字（「后藤一里（烟雨版）」）会超宽折行压到图上 → 截到 6 字 + `…`。"""
-    from nonebot_plugin_waifu import layout, relations, render
+    """长名字（「后藤一里（烟雨版）」）会超宽折行压到图上 → 截到 6 字 + `…`。
+
+    现在名字画在 canvas 上（G6 的节点标签），但截断口径不变 ——
+    卡片 HTML 的 JSON 数据里必须是截过的。
+    """
+    from nonebot_plugin_waifu import graph_g6, layout, relations, render
 
     g = relations.build_relations(marriages=[(1, 2, 1.0)], crushes={}, likes={})
     clusters = layout.layout_graph(g, focus=None)
     html = render.build_graph_html(
         clusters, nicknames={1: "后藤一里烟雨版", 2: "乙"}, avatars={}
     )
-    assert render.NAME_MAX == 6
-    assert "后藤一里烟雨…" in html
-    assert "后藤一里烟雨版" not in html  # 第 7 个字以后不再上图
+    assert graph_g6.NAME_MAX == 6
+    assert render.NAME_MAX == graph_g6.NAME_MAX  # 两处别各写一个数
+    # 大字符串只比计数（直接 `in` 断言一旦失败会把整页打印出来，能把进程卡死）
+    assert html.count("后藤一里烟雨…") == 1
+    assert html.count("后藤一里烟雨版") == 0  # 第 7 个字以后不再上图
 
 
 def test_graph_card_is_wider_than_the_plain_card():
@@ -326,39 +382,52 @@ def test_edge_label_table_drops_the_text_arrow_and_adds_like():
 def test_like_edge_is_blue_solid_and_does_not_clash_with_crush():
     """「喜欢」= 蓝色（#0ea5e9）3px **实线**；三种关系一律实线（配色/粗细不变）。
 
-    用户 2026-10-14：「wife 插件的虚线的效果很差，都用实线」—— 倾心/喜欢
-    原先的虚线段（`_EDGE_DASHES=4`）取消，颜色仍是唯一区分手段。
+    用户 2026-10-14：「wife 插件的虚线的效果很差，都用实线」—— 旧实现靠
+    `_EDGE_DASHES` 全 1；现在线是 G6 画的（`type:'line'`，不给 `lineDash` 就是实线），
+    所以「一律实线」改由「数据里没有任何 `lineDash`」钉住。
     """
-    from nonebot_plugin_waifu import render
+    from nonebot_plugin_waifu import layout, render
 
     assert render._EDGE_COLOR["like"] == "#0ea5e9"
     assert render._EDGE_COLOR["like"] != render._EDGE_COLOR["crush"]
     assert render._EDGE_PX["like"] == 3
-    assert render._EDGE_DASHES["like"] == 1  # 实线
     assert render._EDGE_COLOR["marriage"] == "#db2777"
-    assert render._EDGE_PX["marriage"] == 4 and render._EDGE_DASHES["marriage"] == 1
+    assert render._EDGE_PX["marriage"] == 4
     assert render._EDGE_COLOR["crush"] == "#f59e0b"
-    assert render._EDGE_PX["crush"] == 3 and render._EDGE_DASHES["crush"] == 1
-    # 全表口径：三个 kind 一个不剩地都是实线（别再偷偷加回虚线）
-    assert render._EDGE_DASHES == {"marriage": 1, "crush": 1, "like": 1}
+    assert render._EDGE_PX["crush"] == 3
+    g = _manual((1, 2, "marriage"), (3, 4, "crush"), (5, 6, "like"))
+    html = render.build_graph_html(
+        layout.layout_graph(g, focus=None), nicknames={}, avatars={}
+    )
+    mine = _own_html(html)
+    assert mine.count("lineDash") == 0  # 全表口径：一个 kind 都不许变成虚线
+    assert mine.count('"lineWidth":4') == 1
+    assert mine.count('"lineWidth":3') >= 2
 
 
 def test_ports_render_as_filled_and_hollow_circles_in_the_edge_color():
     """端口圆：**起点实心**（同色填充）、**终点空心**（白底 + 同色描边）、外径一致。
 
-    用户 2026-10-14：「不要箭头了，线条两边一个空心圆一个实心圆，作为节点的接口」。
+    2026-10-15 起画在 G6 里（小圆节点）—— 断言改成看卡片里的数据，口径不变：
+    空心靠 `size` 缩一个描边宽、让外径与实心一致（canvas 的描边居中在半径上）。
     """
-    from nonebot_plugin_waifu import layout, render
+    from nonebot_plugin_waifu import graph_g6, layout, render
 
     (cluster,) = layout.layout_graph(_manual((1, 2, "crush")), focus=None)
-    html = render._cluster_html(cluster, nicknames={}, pool={})
+    html = render.build_graph_html([cluster], nicknames={}, avatars={})
     color = render._EDGE_COLOR["crush"]
-    assert html.count('class="port"') == 2  # 有向边两端各一个
-    assert f"background:{color}" in html  # 实心
-    assert f"background:#ffffff;border:{render.PORT_STROKE}px solid {color}" in html
-    # 外径一致（border-box 才做得到），且不含任何箭头痕迹
-    assert html.count(f"width:{layout.PORT_D}px;height:{layout.PORT_D}px") == 2
-    assert 'class="seg"' in html  # 主线还在
+    # 大字符串只比计数（直接 `in` 断言一旦失败会把整页打印出来，能把进程卡死）
+    assert html.count('"id":"p1-') == 2  # 有向边两端各一个
+    assert html.count(f'"fill":"{color}","stroke":"{color}","lineWidth":0') == 1  # 实心
+    assert (
+        html.count(
+            f'"fill":"#ffffff","stroke":"{color}","lineWidth":{graph_g6.PORT_STROKE}'
+        )
+        == 1
+    )  # 空心
+    assert html.count('"size":12') == 1
+    assert html.count(f'"size":{layout.PORT_D - graph_g6.PORT_STROKE}') == 1
+    assert html.count('"endArrow":false') == 1  # 不再画箭头
 
 
 def test_ports_absent_on_undirected_marriage_edges():
@@ -366,26 +435,36 @@ def test_ports_absent_on_undirected_marriage_edges():
     from nonebot_plugin_waifu import layout, render
 
     (cluster,) = layout.layout_graph(_manual((1, 2, "marriage")), focus=None)
-    html = render._cluster_html(cluster, nicknames={}, pool={})
-    assert 'class="port"' not in html
+    html = render.build_graph_html([cluster], nicknames={}, avatars={})
+    assert html.count('"id":"p1-') == 0
+    assert html.count('"edges":[{"source"') == 1  # 线还在（锚点连出来的）
 
 
-def test_label_is_rotated_along_its_line_in_the_html():
-    """标签**真的转了**：`transform:rotate(θdeg)`，且绕**底边中点**转。
+def test_edge_label_is_a_rotated_capsule_node_in_the_card():
+    """关系名 = **自绘白底胶囊**（G6 的 `labelCfg.style.background` 实测被静默忽略）。
 
-    θ 与 `layout.label_rotation` 同源。
-
-    litehtml 实测不支持 `transform`（静默不转），换 Chromium 正是为了这条 —— 回归钉住。
+    旋转角与 `layout.label_rotation` 同源（胶囊贴着自己的线转），
+    这里只断言卡片里确实带了胶囊节点与它的位图；几何细节在 `tests/test_graph_g6.py`。
     """
-    from nonebot_plugin_waifu import layout, render
+    from nonebot_plugin_waifu import graph_g6, layout, render
 
     (cluster,) = layout.layout_graph(_manual((1, 2, "crush")), focus=None)
     (line,) = cluster.lines
-    html = render._cluster_html(cluster, nicknames={}, pool={})
-    deg = round(layout.label_rotation(line.angle), 1)
-    assert f"transform:rotate({deg}deg)" in html
-    # 旋转原点是底边中点 = 线上那个锚点
-    assert "transform-origin: 50% 100%" in render._GRAPH_CSS
+    html = render.build_graph_html([cluster], nicknames={}, avatars={})
+    assert html.count(f'"id":"{graph_g6.capsule_id(1, 0)}"') == 1
+    svg = base64.b64decode(
+        graph_g6.capsule_uri(
+            render._EDGE_LABEL["crush"],
+            render._EDGE_COLOR["crush"],
+            line.label_x + layout.CHIP_W / 2,
+            line.label_y + layout.CHIP_H,
+            line.angle,
+        ).split(",", 1)[1]
+    ).decode("utf-8")
+    assert "倾心" in svg  # 关系名写在胶囊里
+    assert f"rotate({round(layout.label_rotation(line.angle), 1)} " in svg  # 随线旋转
+    # 旧 `.elab` 的 CSS 口径（transform-origin）已随 div 绘制一起退役
+    assert ".elab" not in render._GRAPH_CSS
 
 
 def test_graph_footer_and_text_fallback_share_the_new_legend():
@@ -400,23 +479,42 @@ def test_graph_footer_and_text_fallback_share_the_new_legend():
     html = render.build_graph_html(
         layout.layout_graph(g, focus=None), nicknames={}, avatars={}
     )
-    assert legend in html
+    assert legend in html  # 图例是短字符串，直接比没问题
     names = {1: "甲", 2: "乙", 3: "丙", 4: "丁", 5: "戊", 6: "己"}
     text = render.build_graph_fallback_text(g, nicknames=names)
     assert legend in text
     assert "夫妻" in text and "倾心" in text and "喜欢" in text
-    assert "倾心→" not in html and "倾心→" not in text
+    assert html.count("倾心→") == 0 and "倾心→" not in text
 
 
 def test_like_edge_renders_its_own_color_and_label():
-    """「喜欢」边在 HTML 里用自己的蓝色 + 「喜欢」chip（不是倾心的琥珀/文案）。"""
-    from nonebot_plugin_waifu import layout, render
+    """「喜欢」边用**自己的蓝色** + 自己的关系名（不是倾心的琥珀/文案）。
+
+    关系名画在 canvas 上（自绘胶囊的位图里），所以这里解 base64 看 SVG，
+    顺手把三种 kind 的配色都在同一条图上验一遍。
+    """
+    from nonebot_plugin_waifu import graph_g6, layout, render
 
     g = _manual((1, 2, "like"), (1, 3, "crush"), (1, 4, "marriage"))
     clusters = layout.layout_graph(g, focus=1)
     html = render.build_graph_html(clusters, nicknames={}, avatars={})
-    assert "喜欢" in html and "#0ea5e9" in html
-    assert "#f59e0b" in html and "#db2777" in html
+    mine = _own_html(html)
+    for kind in ("marriage", "crush", "like"):
+        # 边 + 端口圆都带这个颜色，所以只断言「至少出现」，关键是每种都在
+        assert mine.count(f'"stroke":"{render._EDGE_COLOR[kind]}"') >= 1, kind
+    (cluster,) = clusters
+    for line in cluster.lines:
+        svg = base64.b64decode(
+            graph_g6.capsule_uri(
+                render._EDGE_LABEL[line.kind],
+                render._EDGE_COLOR[line.kind],
+                line.label_x + layout.CHIP_W / 2,
+                line.label_y + layout.CHIP_H,
+                line.angle,
+            ).split(",", 1)[1]
+        ).decode("utf-8")
+        assert f">{render._EDGE_LABEL[line.kind]}<" in svg
+        assert "倾心→" not in svg
 
 
 def test_status_badge_and_avatars_are_vertically_centered():
@@ -439,3 +537,95 @@ def test_status_badge_and_avatars_are_vertically_centered():
     assert ".body { display: flex; align-items: center; }" in render._CSS
     # 胶囊自己撑高度（line-height:1 + 上下 5px），别再靠 margin 挤位置
     assert "margin-left: 10px" not in render._NOTICE_CSS
+
+
+# --------------------------------------------------------------------------- #
+# `_shot` 的「等就绪再截图」：关系图是 G6 异步渲染的，不等就会截到空图
+# --------------------------------------------------------------------------- #
+def _fake_page_ctx(record: list):
+    class _Page:
+        async def goto(self, url):
+            record.append(("goto", url))
+
+        async def set_content(self, html, wait_until=None):
+            record.append(("set_content", wait_until, "g6" in html))
+
+        async def wait_for_function(self, expr, timeout=None):
+            record.append(("wait_for_function", expr, timeout))
+
+        async def screenshot(self, **kw):
+            record.append(("screenshot", kw))
+            return b"PNG"
+
+    class _Ctx:
+        async def __aenter__(self):
+            record.append(("enter",))
+            return _Page()
+
+        async def __aexit__(self, *_exc) -> bool:
+            record.append(("exit",))
+            return False
+
+    def _factory(*_a, **kw):
+        record.append(("new_page", kw))
+        return _Ctx()
+
+    return _factory
+
+
+def test_shot_with_wait_for_waits_for_the_condition_before_screenshotting(monkeypatch):
+    """**防「截到空图」的关键**：勾就绪旗（`wait_for_function`）必须在截图之前。"""
+    import asyncio
+
+    from nonebot_plugin_waifu import graph_g6, render
+
+    record: list = []
+    monkeypatch.setattr(render, "_load_page_ctx", lambda: _fake_page_ctx(record))
+    png = asyncio.run(
+        render._shot(
+            "<html><body>g6</body></html>", width=920, wait_for=graph_g6.READY_EXPR
+        )
+    )
+    assert png == b"PNG"
+    order = [step[0] for step in record]
+    assert order == [
+        "new_page",
+        "enter",
+        "goto",
+        "set_content",
+        "wait_for_function",
+        "screenshot",
+        "exit",
+    ]
+    steps = {step[0]: step for step in record}
+    assert steps["wait_for_function"][1] == graph_g6.READY_EXPR
+    assert steps["wait_for_function"][2] == render.READY_TIMEOUT_MS
+    assert steps["screenshot"][1]["full_page"] is True
+    assert steps["new_page"][1]["viewport"] == {"width": 920, "height": 100}
+
+
+def test_shot_without_wait_for_keeps_using_html_to_pic(monkeypatch):
+    """不带 `wait_for` 的图（抽取卡/回执卡）走老路，别顺手改渲染管线。"""
+    import asyncio
+
+    from nonebot_plugin_waifu import render
+
+    calls: list = []
+
+    async def _fake(html, **kw):
+        calls.append((html, kw))
+        return b"PNG"
+
+    monkeypatch.setattr(render, "_load_renderer", lambda: _fake)
+    monkeypatch.setattr(
+        render,
+        "_load_page_ctx",
+        lambda: pytest.fail("不带 wait_for 时不该去拿 page"),
+    )
+    assert asyncio.run(render._shot("<html></html>", width=720)) == b"PNG"
+    ((_html, kw),) = calls
+    assert kw == {
+        "viewport": {"width": 720, "height": 100},
+        "full_page": True,
+        "device_scale_factor": 1,
+    }
