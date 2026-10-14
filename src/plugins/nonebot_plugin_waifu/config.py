@@ -159,6 +159,25 @@ class Config(BaseModel):
             self.waifu_match_priority = self.waifu_command_priority + 2
         return self
 
+    @field_validator("wife_superusers", mode="before")
+    @classmethod
+    def _accept_bare_qq_numbers(cls, v: Any) -> str:
+        """`.env` 里写裸数字时 pydantic 收到的是 **int 不是 str** —— 转字符串。
+
+        ⚠️ 2026-10-14 生产实证：`WIFE_SUPERUSERS=1330509996` →
+        `ValidationError: input_type=int` → **整个插件起不来**（`Failed to import`）。
+        配置写错绝不能炸插件 —— 与 `_accept_chinese_orientation` 同一类护栏。
+        """
+        if isinstance(v, str):
+            return v
+        if v is None or isinstance(v, bool):
+            return ""
+        if isinstance(v, int):
+            return str(v)
+        if isinstance(v, (list, tuple, set, frozenset)):
+            return ",".join(str(x) for x in v)
+        return str(v)
+
     @field_validator("waifu_orientation", mode="before")
     @classmethod
     def _accept_chinese_orientation(cls, v: Any) -> Any:

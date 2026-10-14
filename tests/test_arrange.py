@@ -65,6 +65,23 @@ def test_parse_superusers_tolerates_formats():
     assert rules.parse_superusers("写错了") == frozenset()  # 不抛：只是白名单里没人
 
 
+def test_config_accepts_bare_number_for_wife_superusers():
+    """`.env` 写裸数字时 pydantic 收到的是 **int** —— 不能炸插件（生产实证）。"""
+    from nonebot_plugin_waifu import rules
+    from nonebot_plugin_waifu.config import Config
+
+    assert Config(wife_superusers=1330509996).wife_superusers == "1330509996"
+    assert Config(wife_superusers="1330509996").wife_superusers == "1330509996"
+    assert Config(wife_superusers=None).wife_superusers == ""
+    assert Config(wife_superusers=["1330509996", 2846018938]).wife_superusers == (
+        "1330509996,2846018938"
+    )
+    # 链路闭合：裸数字进 → 白名单里就是那个 QQ
+    assert rules.parse_superusers(
+        Config(wife_superusers=1330509996).wife_superusers
+    ) == frozenset({1330509996})
+
+
 def test_arrange_permission_checks_the_whitelist():
     """**只有白名单能过**（Permission 在响应器层拦人）。"""
     from nonebot_plugin_waifu import handle

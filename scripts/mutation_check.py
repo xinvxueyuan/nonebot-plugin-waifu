@@ -21,6 +21,8 @@ RULES = ROOT / "src/plugins/nonebot_plugin_waifu/rules.py"
 RENDER = ROOT / "src/plugins/nonebot_plugin_waifu/render.py"
 STORE = ROOT / "src/plugins/nonebot_plugin_waifu/store.py"
 RELATIONS = ROOT / "src/plugins/nonebot_plugin_waifu/relations.py"
+#: 2026-10-14（v0.5.1）：`wife_superusers` 的裸数字护栏（int → str）
+CONFIG = ROOT / "src/plugins/nonebot_plugin_waifu/config.py"
 NOTICES = ROOT / "src/plugins/nonebot_plugin_waifu/notices.py"
 LAYOUT = ROOT / "src/plugins/nonebot_plugin_waifu/layout.py"
 
@@ -454,6 +456,12 @@ MUTATIONS = [
         '        message="已申请离婚，等待对方确认",\n'
         '        lines=((partner, "已申请离婚"),),\n'
         "    )",
+    ),
+    (
+        "MN35 wife_superusers 裸数字护栏失效（int 不转 str → 炸插件）",
+        CONFIG,
+        "        if isinstance(v, int):\n            return str(v)",
+        "        if isinstance(v, int):\n            return v",
     ),
     (
         "MN31 指婚白名单失效（非白名单用户也能指婚）",

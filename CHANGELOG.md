@@ -7,6 +7,18 @@
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-14
+
+### Fixed
+
+- **`WIFE_SUPERUSERS` 写裸数字会让插件起不来**（生产实证，v0.5.0 上线即触发）：
+  `.env` 里 `WIFE_SUPERUSERS=1330509996` 交给 pydantic 的是 **int 不是 str**，字段却是 `str`
+  → `ValidationError` → `Failed to import`（整个插件不加载）。现在加 `field_validator(mode="before")`
+  统一转字符串（int / 列表 / None 都容忍），配置写错**不再炸插件** —— 与
+  `WAIFU_ORIENTATION` 写中文的护栏同类。测试补 1 条、变异体补 1 条（MN35）。
+- 说明：v0.5.0 的其余内容不变；生产事件期间用「注释掉该键」临时恢复，修好后已按
+  `WIFE_SUPERUSERS=1330509996` 恢复。
+
 ## [0.5.0] - 2026-10-14
 
 ### Added
