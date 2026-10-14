@@ -15,7 +15,8 @@ def _mk(*edges):
         (a, b, float(i)) for i, (a, b, kind) in enumerate(edges) if kind == "m"
     ]
     crushes = {a: b for a, b, kind in edges if kind == "c"}
-    return relations.build_relations(marriages=marriages, crushes=crushes)
+    likes = {a: b for a, b, kind in edges if kind == "k"}
+    return relations.build_relations(marriages=marriages, crushes=crushes, likes=likes)
 
 
 def _l():

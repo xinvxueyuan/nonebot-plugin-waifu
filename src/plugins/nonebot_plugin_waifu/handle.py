@@ -876,6 +876,7 @@ async def _h_graph(
     g = relations.build_relations(
         marriages=store.list_marriages(gid),
         crushes=store.latest_locked_partners(gid),
+        likes=store.latest_drawn_partners(gid),
         max_edges=plugin_config.waifu_graph_max_edges,
     )
     if not g.edges:

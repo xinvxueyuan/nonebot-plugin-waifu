@@ -189,7 +189,9 @@ def test_avatar_failure_is_not_negatively_cached(monkeypatch):
 def _graph():
     from nonebot_plugin_waifu import layout, relations
 
-    g = relations.build_relations(marriages=[(1, 2, 1.0)], crushes={3: 1}, max_edges=20)
+    g = relations.build_relations(
+        marriages=[(1, 2, 1.0)], crushes={3: 1}, likes={}, max_edges=20
+    )
     return g, layout.layout_graph(g, focus=1)
 
 
@@ -223,7 +225,7 @@ def test_graph_html_contains_edges_with_gradient_bands():
 def test_graph_fallback_text_has_no_at_and_lists_relations():
     from nonebot_plugin_waifu import relations, render
 
-    g = relations.build_relations(marriages=[(1, 2, 1.0)], crushes={3: 1})
+    g = relations.build_relations(marriages=[(1, 2, 1.0)], crushes={3: 1}, likes={})
     text = render.build_graph_fallback_text(g, nicknames={1: "甲", 2: "乙", 3: "丙"})
     assert "夫妻" in text and "倾心" in text and "甲" in text
     assert "@" not in text
@@ -245,7 +247,9 @@ def test_two_member_clusters_share_one_row():
     """**2 成员簇两列并排**：两个 2 成员簇落在同一个 `.row` 里。"""
     from nonebot_plugin_waifu import layout, relations, render
 
-    g = relations.build_relations(marriages=[(1, 2, 1.0), (3, 4, 2.0)], crushes={})
+    g = relations.build_relations(
+        marriages=[(1, 2, 1.0), (3, 4, 2.0)], crushes={}, likes={}
+    )
     clusters = layout.layout_graph(g, focus=None)
     html = render.build_graph_html(clusters, nicknames={}, avatars={})
     assert html.count('class="row"') == 1
@@ -258,7 +262,9 @@ def test_big_cluster_gets_its_own_row():
     """≥3 成员簇独占一行（不跟 2 成员簇挤在一行）。"""
     from nonebot_plugin_waifu import layout, relations, render
 
-    g = relations.build_relations(marriages=[(1, 2, 1.0)], crushes={3: 1, 4: 5})
+    g = relations.build_relations(
+        marriages=[(1, 2, 1.0)], crushes={3: 1, 4: 5}, likes={}
+    )
     clusters = layout.layout_graph(g, focus=None)
     assert sorted(len(c.nodes) for c in clusters) == [2, 3]
     html = render.build_graph_html(clusters, nicknames={}, avatars={})
@@ -270,7 +276,7 @@ def test_node_name_is_truncated_to_six_chars():
     """长名字（「后藤一里（烟雨版）」）会超宽折行压到图上 → 截到 6 字 + `…`。"""
     from nonebot_plugin_waifu import layout, relations, render
 
-    g = relations.build_relations(marriages=[(1, 2, 1.0)], crushes={})
+    g = relations.build_relations(marriages=[(1, 2, 1.0)], crushes={}, likes={})
     clusters = layout.layout_graph(g, focus=None)
     html = render.build_graph_html(
         clusters, nicknames={1: "后藤一里烟雨版", 2: "乙"}, avatars={}
@@ -286,7 +292,7 @@ def test_graph_card_is_wider_than_the_plain_card():
 
     assert render.GRAPH_CARD_WIDTH > render.CARD_WIDTH
     assert render.GRAPH_MAX_WIDTH >= render.GRAPH_CARD_WIDTH + 32  # body padding 16*2
-    g = relations.build_relations(marriages=[(1, 2, 1.0)], crushes={})
+    g = relations.build_relations(marriages=[(1, 2, 1.0)], crushes={}, likes={})
     clusters = layout.layout_graph(g, focus=None)
     html = render.build_graph_html(clusters, nicknames={}, avatars={})
     assert f"width: {render.GRAPH_CARD_WIDTH}px" in html  # 卡片宽注入进 CSS

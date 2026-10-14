@@ -195,9 +195,11 @@ def test_graph_empty_and_no_relations_notices_are_information_dense():
     empty = notices.graph_empty_notice(members=107)
     assert empty.title == "本群还没有老婆关系"
     assert any("107" in str(v) for _k, v in empty.fields)
+    assert "喜欢" in empty.note  # 每日抽取即「喜欢」
     assert empty.note  # 下一步在
 
     focus = notices.no_relations_notice(focus_id=20002)
     assert focus.title == "ta 还没有任何老婆关系"
     assert focus.avatar_user_id == 20002  # 当事人头像在
+    assert any("喜欢" in str(v) for _k, v in focus.fields)
     assert focus.note

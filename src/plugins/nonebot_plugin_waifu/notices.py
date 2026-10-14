@@ -187,9 +187,9 @@ def graph_empty_notice(*, members: int) -> NoticeContext:
         tone="info",
         fields=(
             ("成员池", f"{members} 人（在群里发过言的都算）"),
-            ("图上画什么", "夫妻（无向）与倾心（有向）；只画**已经发生**的关系"),
+            ("图上画什么", "夫妻（无向）· 倾心/喜欢（有向）；只画已经发生的关系"),
         ),
-        note="「娶老婆 @某人」成为夫妻 · 「确认老婆」成为倾心",
+        note="「娶老婆 @某人」成为夫妻 · 「确认老婆」成为倾心 · 每日抽取即「喜欢」",
     )
 
 
@@ -199,8 +199,8 @@ def no_relations_notice(*, focus_id: int) -> NoticeContext:
         title="ta 还没有任何老婆关系",
         tone="info",
         avatar_user_id=focus_id,
-        fields=(("说明", "既没有夫妻、也没有倾心"),),
-        note="等 ta 抽完并「确认老婆」，或「娶老婆 @ta」之后再看",
+        fields=(("说明", "既没有夫妻、也没有倾心、也没有喜欢"),),
+        note="等 ta 抽一次（抽取即「喜欢」）、「确认老婆」，或「娶老婆 @ta」之后再看",
     )
 
 

@@ -74,7 +74,7 @@ def build_relations(
     *,
     marriages: Iterable[tuple[int, int, float]],
     crushes: Mapping[int, int],
-    likes: Mapping[int, int] | None = None,
+    likes: Mapping[int, int],
     max_edges: int = DEFAULT_MAX_EDGES,
 ) -> RelationGraph:
     """把库里的原始行整理成边集合。
@@ -85,8 +85,8 @@ def build_relations(
     Args:
         marriages: `(a, b, since)` 原始行（**含双向两行**），已按 since 升序。
         crushes: `{user_id: partner_id}`（每人最近一次确认）→ 倾心。
-        likes: `{user_id: partner_id}`（每人最近一次抽取）→ 喜欢；
-            `None`（调用点还没接线）等价空。同一方向已有倾心时不再画喜欢。
+        likes: `{user_id: partner_id}`（每人最近一次抽取）→ 喜欢；**必填**
+            （该群没有抽取记录时传 `{}`）。同一方向已有倾心时不再画喜欢。
         max_edges: 截断上限；`<= 0` 表示不限。
     """
     seen: set[tuple[int, int]] = set()
@@ -107,7 +107,7 @@ def build_relations(
             continue
         crush_dirs.add((x, y))
         edges.append(RelationEdge(x, y, KIND_CRUSH))
-    for src, dst in sorted((likes or {}).items()):
+    for src, dst in sorted(likes.items()):
         x, y = int(src), int(dst)
         if x == y or (min(x, y), max(x, y)) in seen or (x, y) in crush_dirs:
             continue
