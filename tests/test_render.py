@@ -236,3 +236,59 @@ def test_graph_title_switches_with_focus():
     a = render.build_graph_html(clusters, nicknames={1: "甲"}, avatars={}, focus=1)
     b = render.build_graph_html(clusters, nicknames={1: "甲"}, avatars={})
     assert "以「甲」为中心" in a and "以「甲」为中心" not in b
+
+
+# --------------------------------------------------------------------------- #
+# 用户实拍（2026-10-14）：「4 个 2 成员簇各占一行、整图 2271px 高」+ 长名字折行压图
+# --------------------------------------------------------------------------- #
+def test_two_member_clusters_share_one_row():
+    """**2 成员簇两列并排**：两个 2 成员簇落在同一个 `.row` 里。"""
+    from nonebot_plugin_waifu import layout, relations, render
+
+    g = relations.build_relations(marriages=[(1, 2, 1.0), (3, 4, 2.0)], crushes={})
+    clusters = layout.layout_graph(g, focus=None)
+    html = render.build_graph_html(clusters, nicknames={}, avatars={})
+    assert html.count('class="row"') == 1
+    assert html.count('class="cluster"') == 2
+    row = html[html.index('class="row"') : html.index('class="footer"')]
+    assert row.count('class="cluster"') == 2  # 两个簇都在这一行里
+
+
+def test_big_cluster_gets_its_own_row():
+    """≥3 成员簇独占一行（不跟 2 成员簇挤在一行）。"""
+    from nonebot_plugin_waifu import layout, relations, render
+
+    g = relations.build_relations(marriages=[(1, 2, 1.0)], crushes={3: 1, 4: 5})
+    clusters = layout.layout_graph(g, focus=None)
+    assert sorted(len(c.nodes) for c in clusters) == [2, 3]
+    html = render.build_graph_html(clusters, nicknames={}, avatars={})
+    assert html.count('class="row"') == 2
+    assert html.count('class="cluster"') == 2
+
+
+def test_node_name_is_truncated_to_six_chars():
+    """长名字（「后藤一里（烟雨版）」）会超宽折行压到图上 → 截到 6 字 + `…`。"""
+    from nonebot_plugin_waifu import layout, relations, render
+
+    g = relations.build_relations(marriages=[(1, 2, 1.0)], crushes={})
+    clusters = layout.layout_graph(g, focus=None)
+    html = render.build_graph_html(
+        clusters, nicknames={1: "后藤一里烟雨版", 2: "乙"}, avatars={}
+    )
+    assert render.NAME_MAX == 6
+    assert "后藤一里烟雨…" in html
+    assert "后藤一里烟雨版" not in html  # 第 7 个字以后不再上图
+
+
+def test_graph_card_is_wider_than_the_plain_card():
+    """关系图卡片比普通卡片宽（2 成员簇两列并排要 808px，640 的卡片放不下）。"""
+    from nonebot_plugin_waifu import layout, relations, render
+
+    assert render.GRAPH_CARD_WIDTH > render.CARD_WIDTH
+    assert render.GRAPH_MAX_WIDTH >= render.GRAPH_CARD_WIDTH + 32  # body padding 16*2
+    g = relations.build_relations(marriages=[(1, 2, 1.0)], crushes={})
+    clusters = layout.layout_graph(g, focus=None)
+    html = render.build_graph_html(clusters, nicknames={}, avatars={})
+    assert f"width: {render.GRAPH_CARD_WIDTH}px" in html  # 卡片宽注入进 CSS
+    assert ".row { display: block" in html  # 行容器
+    assert "display: inline-block" in html  # 簇按 inline-block 排（两列并排）

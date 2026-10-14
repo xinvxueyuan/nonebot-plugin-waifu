@@ -471,15 +471,40 @@ _NODE_EDGE_COLOR: Final[dict[str, str]] = {
     "crush": "#f59e0b",  # 倾心：琥珀、虚线细
 }
 
+#: 边的主线段宽度（px）：夫妻最粗（4）> 倾心（3）—— 用户实拍：
+#: 「连线几乎看不见」（旧值统一 3px 且虚线被切成 5 段，每段只有几个像素）。
+_NODE_EDGE_PX: Final[dict[str, int]] = {"marriage": 4, "crush": 3}
+
+#: 虚线切片数：`dashes=2` → 3 切片、**只画首尾两段**，中间那段正好留给关系名 chip
+#: （旧值 5 → 9 切片只画 5 段，段太短看不见）。
+_NODE_EDGE_DASHES: Final[dict[str, int]] = {"marriage": 1, "crush": 2}
+
+#: 关系图卡片宽：**比其它卡片宽** —— 2 成员簇要两列并排，而每簇是
+#: `layout.PAIR_SPAN(260) + 节点盒(96) + 两侧 PAD(24*2) = 404px`，两簇 808px；
+#: 普通卡片（640）的内容宽只有 590px，放不下两列。
+GRAPH_CARD_WIDTH: Final[int] = 880
+#: 关系图的渲染上限宽：必须 ≥ 卡片宽 + body padding（16*2），否则内容被压扁。
+GRAPH_MAX_WIDTH: Final[int] = 920
+
 #: 边上直接写的关系名；`倾心→` 让「谁倾心谁」在图上可读（用户口径：能看出方向）
 _EDGE_LABEL: Final[dict[str, str]] = {"marriage": "夫妻", "crush": "倾心→"}
 
-#: 关系图私有部分（公共段见 `_BASE_CSS`：字体栈/卡片框/标题条**只写一处**）
+#: 节点名字最多显示几个字符（超出截断 + `…`）：节点盒只有 96px 宽 ≈ 6 个 16px 汉字，
+#: 再长就会折行、压到下面的边和关系名 chip（用户实拍：「后藤一里（烟雨版）」）。
+NAME_MAX: Final[int] = 6
+
+#: 关系图私有部分（公共段见 `_BASE_CSS`：字体栈/卡片框/标题条**只写一处**）；
+#: `{card_width}` 由 `GRAPH_CARD_WIDTH` 注入（**不能用 `.format()`**，见 _NOTICE_CSS）。
 _GRAPH_CSS: Final[str] = (
     _BASE_CSS
     + """
+  /* 关系图卡片更宽：2 成员簇两列并排（两簇 808px > 普通卡片内容宽 590px） */
+  .card { width: {card_width}px; }
   .sub { font-size: 17px; color: #9d174d; margin-bottom: 14px; }
-  .cluster { position: relative; margin-bottom: 10px; }
+  /* 一行放一个/两个簇：`.cluster` 是 inline-block，一行放不下会自动换行 */
+  .row { display: block; text-align: center; }
+  .cluster { position: relative; margin-bottom: 10px; display: inline-block;
+             vertical-align: top; }
   .cap { font-size: 16px; color: #9d174d; margin-bottom: 4px; }
   /* 96px = layout.NODE_W / layout.NODE_H（节点盒尺寸）；两处必须一致 */
   .node { position: absolute; width: 96px; height: 96px; text-align: center; }
@@ -488,7 +513,8 @@ _GRAPH_CSS: Final[str] = (
   .ph-av { display: block; width: 64px; height: 64px; border-radius: 32px;
            background: #fce7f3; color: #9d174d; font-size: 26px;
            line-height: 64px; text-align: center; margin: 0 auto; }
-  .nm { font-size: 16px; color: #0f172a; line-height: 24px; }
+  /* `nowrap`：名字已截到 6 字 + …，再换行就会压到下面的图（单行才好看） */
+  .nm { font-size: 16px; color: #0f172a; line-height: 24px; white-space: nowrap; }
   .seg { position: absolute; }
   .elab { position: absolute; font-size: 14px; padding: 1px 6px;
           border-radius: 8px; background: #ffffff; }
@@ -535,35 +561,64 @@ def _band_background(w: int, h: int, angle: float, color: str, px: int = 3) -> s
     )
 
 
-def _segment_html(line: EdgeLine, color: str, *, dashes: int = 1) -> str:
+def _padded_box(
+    x: int, y: int, w: int, h: int, *, px: int
+) -> tuple[int, int, int, int]:
+    """把线段盒在**法线方向**撑到至少 `px`（保持中心不动）。
+
+    ⚠️ 实测坑：水平/垂直线的 bbox 在法线方向只有 `max(1, ...)` **伪造出的 1px** ——
+    色带的粗细被盒子卡死在 1px，画出来就是一根发丝（用户实拍抱怨过「看不见线」）。
+    斜线本来就有足够余量，这里只对「薄盒子」生效。
+    """
+    pw, ph = max(w, px), max(h, px)
+    return (round(x + (w - pw) / 2), round(y + (h - ph) / 2), pw, ph)
+
+
+def _segment_html(line: EdgeLine, color: str, *, dashes: int = 1, px: int = 3) -> str:
     """一条边：`dashes=1` 实线；`>1` 拆成虚线段（每段一个小 bbox，共用同一角度）。
+
+    `px` = 主线段粗细（夫妻 4 / 倾心 3）—— 线要真的看得见，别指望「细线也能看出」。
 
     ⚠️ 备选方案（探针 B FAIL 时）把本函数体换成「沿线段布 3×3px 小方块」即可，
     入参/返回不变，上层模板不用改。
     """
     if dashes <= 1:
+        bx, by, bw, bh = _padded_box(line.x, line.y, line.w, line.h, px=px)
         return _SEG_TEMPLATE.format(
-            x=line.x,
-            y=line.y,
-            w=line.w,
-            h=line.h,
-            bg=_band_background(line.w, line.h, line.angle, color),
+            x=bx,
+            y=by,
+            w=bw,
+            h=bh,
+            bg=_band_background(bw, bh, line.angle, color, px),
         )
+    # 虚线：以**线段中点**为基准向两端量，而不是从 bbox 角上累加 ——
+    # 轴对齐线的 bbox 高/宽是伪造的 1px，从角上累加会让每段虚线错开 1px。
+    rad = math.radians(line.angle)
+    ux, uy = math.cos(rad), math.sin(rad)
+    mx, my = line.x + line.w / 2, line.y + line.h / 2
     out: list[str] = []
     slices = dashes * 2 - 1
     for i in range(slices):
-        if i % 2:  # 奇数片留白 = 虚线间隙
+        if i % 2:  # 奇数片留白 = 虚线间隙（中间那段正好留给 chip）
             continue
         t0, t1 = i / slices, (i + 1) / slices
-        w = max(1, round(line.w * (t1 - t0)))
-        h = max(1, round(line.h * (t1 - t0)))
+        c = (t0 + t1) / 2 - 0.5  # 该片中心相对线段中点的参数
+        sw = max(1, round(line.w * (t1 - t0)))
+        sh = max(1, round(line.h * (t1 - t0)))
+        bx, by, bw, bh = _padded_box(
+            round(mx + c * ux * line.w - sw / 2),
+            round(my + c * uy * line.h - sh / 2),
+            sw,
+            sh,
+            px=px,
+        )
         out.append(
             _SEG_TEMPLATE.format(
-                x=round(line.x + line.w * t0),
-                y=round(line.y + line.h * t0),
-                w=w,
-                h=h,
-                bg=_band_background(w, h, line.angle, color),
+                x=bx,
+                y=by,
+                w=bw,
+                h=bh,
+                bg=_band_background(bw, bh, line.angle, color, px),
             )
         )
     return "".join(out)
@@ -573,6 +628,10 @@ def _node_html(
     node: NodeBox, *, nicknames: dict[int, str], avatars: dict[int, str | None]
 ) -> str:
     raw = (nicknames.get(node.uid) or "").strip()
+    # 名字截断到 `NAME_MAX` 字 + …：节点盒只有 96px 宽，长名字会**折行压到图上**
+    # （用户实拍：「后藤一里（烟雨版）」折成两行、跟关系名 chip 交叠）。
+    if len(raw) > NAME_MAX:
+        raw = f"{raw[:NAME_MAX]}…"
     name = html_mod.escape(raw or str(node.uid))
     uri = avatars.get(node.uid)
     if uri:
@@ -583,6 +642,43 @@ def _node_html(
     return _NODE_TEMPLATE.format(x=node.x, y=node.y, avatar=avatar, name=name)
 
 
+def _cluster_html(
+    cluster: ClusterLayout, *, nicknames: dict[int, str], pool: dict[int, str | None]
+) -> str:
+    """一个簇的 HTML：线段 + 关系名 chip + 节点（绝对定位，坐标来自 layout）。"""
+    segs: list[str] = []
+    for line in cluster.lines:
+        color = _NODE_EDGE_COLOR.get(line.kind, "#db2777")
+        segs.append(
+            _segment_html(
+                line,
+                color,
+                dashes=_NODE_EDGE_DASHES.get(line.kind, 1),
+                px=_NODE_EDGE_PX.get(line.kind, 3),
+            )
+        )
+        segs.append(
+            _LABEL_TEMPLATE.format(
+                x=line.label_x,
+                y=line.label_y,
+                color=color,
+                text=html_mod.escape(_EDGE_LABEL.get(line.kind, line.kind)),
+            )
+        )
+    nodes = "".join(
+        _node_html(n, nicknames=nicknames, avatars=pool) for n in cluster.nodes
+    )
+    cap = (
+        f'<div class="cap">{html_mod.escape(cluster.caption)}</div>'
+        if cluster.caption
+        else ""
+    )
+    return (
+        f'<div class="cluster" style="width:{cluster.width}px;'
+        f'height:{cluster.height}px">{cap}{"".join(segs)}{nodes}</div>'
+    )
+
+
 def build_graph_html(
     clusters: Sequence[ClusterLayout],
     *,
@@ -591,35 +687,30 @@ def build_graph_html(
     focus: int | None = None,
     title: str = "老婆关系图",
 ) -> str:
-    """拼关系图 HTML（**纯函数**，转义都在这里做）。"""
+    """拼关系图 HTML（**纯函数**，转义都在这里做）。
+
+    **排布**：2 成员簇两列并排（每行两个 `.cluster`），大簇（≥3 成员）独占一行 ——
+    实拍里 4 个 2 成员簇各占一行、整图 2271px 高，用户要求「排紧一点」。
+    """
     pool = avatars or {}
-    blocks: list[str] = []
+    rows: list[str] = []
+    pair_row: list[str] = []  # 攒着两列并排的 2 成员簇
+
+    def flush_pairs() -> None:
+        if pair_row:
+            rows.append(f'<div class="row">{"".join(pair_row)}</div>')
+            pair_row.clear()
+
     for cluster in clusters:
-        segs: list[str] = []
-        for line in cluster.lines:
-            color = _NODE_EDGE_COLOR.get(line.kind, "#db2777")
-            dashes = 5 if line.kind == "crush" else 1
-            segs.append(_segment_html(line, color, dashes=dashes))
-            segs.append(
-                _LABEL_TEMPLATE.format(
-                    x=line.label_x,
-                    y=line.label_y,
-                    color=color,
-                    text=html_mod.escape(_EDGE_LABEL.get(line.kind, line.kind)),
-                )
-            )
-        nodes = "".join(
-            _node_html(n, nicknames=nicknames, avatars=pool) for n in cluster.nodes
-        )
-        cap = (
-            f'<div class="cap">{html_mod.escape(cluster.caption)}</div>'
-            if cluster.caption
-            else ""
-        )
-        blocks.append(
-            f'<div class="cluster" style="width:{cluster.width}px;'
-            f'height:{cluster.height}px">{cap}{"".join(segs)}{nodes}</div>'
-        )
+        block = _cluster_html(cluster, nicknames=nicknames, pool=pool)
+        if len(cluster.nodes) == 2:
+            pair_row.append(block)
+            if len(pair_row) == 2:
+                flush_pairs()
+        else:
+            flush_pairs()
+            rows.append(f'<div class="row">{block}</div>')
+    flush_pairs()
     who = (
         f"以「{html_mod.escape((nicknames.get(focus) or str(focus)).strip())}」为中心"
         if focus
@@ -628,10 +719,10 @@ def build_graph_html(
     sub = f"{who} · {len(clusters)} 块 · {sum(len(c.lines) for c in clusters)} 条关系"
     footer = "粉色实线=夫妻 · 橙色虚线=倾心（箭头方向 = 倾心的一方 → 被倾心的人）"
     return _GRAPH_TEMPLATE.format(
-        css=_GRAPH_CSS,
+        css=_GRAPH_CSS.replace("{card_width}", str(GRAPH_CARD_WIDTH)),
         title=html_mod.escape(title),
         sub=html_mod.escape(sub),
-        clusters="".join(blocks),
+        clusters="".join(rows),
         footer=html_mod.escape(footer),
     )
 
@@ -650,7 +741,7 @@ async def render_graph(
             build_graph_html(
                 clusters, nicknames=nicknames, avatars=avatars, focus=focus
             ),
-            max_width=MAX_WIDTH,
+            max_width=GRAPH_MAX_WIDTH,
         )
     except Exception as e:
         logger.warning("关系图渲染失败，回退纯文本: %s: %s", type(e).__name__, e)
