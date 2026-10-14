@@ -1,6 +1,6 @@
 # nonebot-plugin-waifu
 
-今日老婆：从群内活跃成员里抽一位当老婆，支持换一只/确认/娶老婆/离婚/指婚。
+NoneBot2 插件（OneBot V11 群聊）：从群内活跃成员里抽一位当「今日老婆」，支持换一只 / 确认 / 娶老婆 / 离婚 / 超管指婚，结果一律以卡片图呈现。
 
 > 「今日老婆」从一个**活跃度池**里抽人：只要在群里发过言的人就会进池子
 > （不活跃的人抽不到）。抽签、配额、跨天判定全部落 sqlite，
@@ -13,6 +13,32 @@
 > **所有命令回执都是图片**：抽取/确认/娶/离/配额/已抽遍/用法/空状态一律出图
 > （渲染不可用时回退**信息等价**的纯文本）。
 
+## 功能
+
+- **活跃度池抽取**：只要在群里发过言就会进池（`on_message` catch-all、`block=False`，
+  只记一笔活跃度，从不阻断传播、从不回消息）；不活跃的人抽不到。
+- **每日配额**：每人每天最多抽 **20** 次（`WAIFU_DAILY_LIMIT`）——「当天首次」与
+  「每次换一只」**都计数**，超限文案逐字固定。
+- **换一只不重复**：同一天内已经抽到过的人不会再出现（**首次抽到的那位也算**），
+  按「群 + 用户 + 日期」累积去重，只影响自己；抽遍后给专门的「抽遍了」回执。
+- **确认老婆只锁自己**：你之后抽签不会再抽到 ta（换一只也跳过），**别人仍可能抽到 ta**；
+  一天一个、按日期恢复；确认后当天不能再换人。
+- **娶老婆要双方互相发**：3 分钟窗口（`WAIFU_PENDING_MINUTES`）；可一次 @ 多人
+  （也接受多个空格/逗号分隔的 QQ 号），对每人各发一次请求、**各算各的**；
+  机器人目标与超出上限**整条拒绝、全有全无**。绑定后双方仍照常参与每日抽取。
+- **离婚单人即时生效**：无需对方同意，发一句当场解除、随离随抽；只解除**这一对**。
+- **老婆关系图**：把本群关系画成人物关系图 —— 夫妻 / 倾心 / 喜欢三种边，焦点居中、
+  一度关系环绕、关系名沿线条旋转，有向边用两端端口圆标方向；边数上限
+  `WAIFU_GRAPH_MAX_EDGES`（默认 60），可 `@某人` 只看 ta 的一度关系。
+- **指婚（超管逃生门）**：`WIFE_SUPERUSERS` 白名单专用，**字面绕过双方**直接绑定
+  （不用回发确认、不看配偶上限、不挡机器人）。
+- **结果卡片**：htmlrender（Chromium）出图，首行成句文案 + QQ号/昵称/头像/性别/最后发言时间；
+  渲染不可用时回退字段一致的纯文本。**抽取结果消息不含任何 `@`**。
+- **容灾**：抽签、配额、跨天判定、待确认请求全落 sqlite，进程被杀 / 机器重启都不丢；
+  跨天按 `Asia/Shanghai` 算「当天」，每天 0 点重置当日老婆与配额。
+- **配置驱动**：13 个环境变量旋钮（命令词、取向、配额、上限、优先级…）；
+  配置写错**不炸插件**（告警并回退默认 / 自动纠正）。
+
 ## 命令
 
 | 命令 | 别名 | 说明 |
@@ -23,16 +49,88 @@
 | `娶老婆 @某人`（可一次 @ 多人，别名：`结婚`） | `结婚`、`/娶老婆`、`/结婚` | 需**双方互相发**；3 分钟内有效；绑定后双方仍照常参与每日抽取（2026-10-14 起）；单配（`WAIFU_MAX_PARTNERS=1`）下对方已婚则娶不了。**可一次 @ 多人**（也接受多个空格/逗号分隔的 QQ 号）：对每人各发一次请求、各算各的 |
 | `离婚 @某人`（或 `离婚 QQ号`） | `/离婚` | **无需对方同意**：单人发一句即生效（收命令当场解除，不必等 ta 回发）；离婚后可立即再抽。只解除**这一对**（多配偶下其它关系不受影响） |
 | `老婆关系图`（**可配**） | `/老婆关系图` | 把本群关系画成**人物关系图**（夫妻 / 倾心 / 喜欢）：焦点居中、一度关系环绕、**边上直接写关系名**；有向关系（倾心 / 喜欢）用**两端端口圆**标方向（**实心=发起方、空心=被指向的一方**），关系名**沿线条旋转、底边贴线**。**可 `@某人`** 只看 ta 的一度关系，无参看全图；渲染不可用时回退纯文本（带同一条图例）。命令词由 `WAIFU_GRAPH_CMD` 决定（默认 `老婆关系图`） |
-
 | `指婚 @a @b @c`（**超管**） | `/指婚` | **仅 `WIFE_SUPERUSERS` 白名单可用**（不在白名单里连回执都收不到）：**字面绕过双方** —— 第一位是发起人，其余人**直接**与 ta 绑定（不用回发确认、不看 `WAIFU_MAX_PARTNERS`、不挡机器人）。要解除用 `离婚 @某人` |
 
 「换老婆」的命令词是**配置可变**的（`WAIFU_CHANGE_CMD`）：源码默认 `换老婆`，
 生产 `.env` 写 `WAIFU_CHANGE_CMD=换一只` 即切换命令词，斜杠别名 `/换一只` 会跟着变。
+「老婆关系图」同理（`WAIFU_GRAPH_CMD`，默认 `老婆关系图`，斜杠别名跟着走）。
 
 「指婚」是**超管逃生门**：命令词固定（不做配置项），白名单走 `WIFE_SUPERUSERS`，
 非白名单用户在**响应器层**就被拦掉（连用法回执都收不到，不暴露这个功能）。
 语义是**字面绕过**：不产生待确认请求、不看配偶上限（单配 `WAIFU_MAX_PARTNERS=1`
 下也照样能「a 娶 b 和 c」）、不挡机器人、对方已婚也照样绑；顺带把旧的求婚请求作废。
+
+## 配置
+
+`.env` / `.env.prod`（NoneBot 会读取）：
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `WAIFU_DAILY_LIMIT` | `20` | 每天每人抽取次数上限（含首次与每次换一只） |
+| `WAIFU_MAX_PARTNERS` | `1` | 一个人最多能娶几个老婆；**`0` = 不限**；默认 1 |
+| `WAIFU_PENDING_MINUTES` | `3` | **娶老婆**的确认窗口（分钟）；离婚单人即时生效、不受此窗口限制 |
+| `WAIFU_ORIENTATION` | `all` | `normal` 正常（只抽异性）/ `all` 所有（不限，默认）/ `reverse` 相反（只抽同性）；也可写中文 |
+| `WAIFU_HEADLINE_TEMPLATE` | `{drawer}, 你今天的群友老婆是 {partner}（{user_id}）` | 卡片首行文案；生产覆盖为「群幼」 |
+| `WAIFU_CHANGE_CMD` | `换老婆` | 「换老婆」命令词；**生产覆盖为 `换一只`** |
+| `WIFE_SUPERUSERS` | （空） | 「指婚」白名单 QQ 号（逗号/空格分隔）；**生产 = `1330509996`**。⚠️ 键名就是 `WIFE_SUPERUSERS`（**不是** `WAIFU_SUPERUSERS`）；写裸数字也收（v0.5.1 起不会因此把插件炸掉） |
+| `WAIFU_GRAPH_CMD` | `老婆关系图` | 「老婆关系图」命令词 |
+| `WAIFU_GRAPH_MAX_EDGES` | `60` | 关系图最多画几条关系边（超出截断并在页脚说明）；**上限 60** |
+| `WAIFU_SHOW_QUOTA_IN_CARD` | `true` | 卡片上是否显示「今日已用 N/上限 次」 |
+| `WAIFU_MEMBER_TTL_DAYS` | `0` | 活跃度保留天数；0 = 不淘汰 |
+| `WAIFU_MATCH_PRIORITY` | `5` | 活跃度监听 matcher 优先级（必须 > 命令的 3） |
+| `WAIFU_COMMAND_PRIORITY` | `3` | 「抽」类命令的 matcher 优先级（越小越先） |
+
+> **`WAIFU_MATCH_PRIORITY` 必须大于 `WAIFU_COMMAND_PRIORITY`**：监听是 catch-all，
+> 优先级写反了命令会被监听抢先。写反**不会让插件起不来** —— 只告警并自动把监听优先级
+> 调成 `命令优先级 + 2`。
+
+## 依赖与安装
+
+- 运行依赖：`nonebot2 >= 2.5.0`、`nonebot-adapter-onebot >= 2.4.6`（OneBot V11）、
+  `nonebot-plugin-localstore >= 0.7.4`（数据目录）、`tzdata >= 2025.1`（`Asia/Shanghai` 时区数据）、
+  `httpx >= 0.26.0,<1.0.0`（头像下载）
+- （可选）额外依赖：`nonebot-plugin-htmlrender == 0.6.7` + `playwright install chromium`
+  （结果卡片渲染成图；缺了回退纯文本）
+- 安装（宿主以 git 子模块引入）：
+
+```bash
+git submodule add -b main https://github.com/xinvxueyuan/nonebot-plugin-waifu.git \
+  vendor/nonebot-plugin-waifu
+git -C vendor/nonebot-plugin-waifu checkout <钉定的 SHA>
+```
+
+- 宿主 `[tool.nonebot] plugin_dirs` 加一行 `vendor/nonebot-plugin-waifu/src/plugins`：
+
+```toml
+[tool.nonebot]
+plugin_dirs = ["vendor/nonebot-plugin-waifu/src/plugins"]
+```
+
+- `.env` 里加两行（示例，按需改）：
+
+```
+WAIFU_CHANGE_CMD=换一只
+WAIFU_HEADLINE_TEMPLATE={drawer}, 你今天的群幼老婆是 {partner}（{user_id}）
+```
+
+## 测试与门禁
+
+```bash
+uv sync --all-groups                                    # 首次：装齐 dev / lint 组
+uv run python -m pytest tests/ -q                       # 单测
+uv run ruff check . && uv run ruff format --check .     # lint + 格式
+uv run pyright                                          # 类型（strict）
+uv run python scripts/mutation_check.py                 # 变异门禁
+```
+
+- 本机 uv 约定：先清掉可能已导出的 `UV_PYTHON` / `UV_PROJECT_ENVIRONMENT` /
+  `SSL_CERT_FILE` / `VIRTUAL_ENV` / `PYTHONPATH`，即
+  `env -u UV_PYTHON -u UV_PROJECT_ENVIRONMENT -u SSL_CERT_FILE -u VIRTUAL_ENV -u PYTHONPATH uv run ...`；
+  `scripts/mutation_check.py` 起子进程时会自己清这层变量。
+- **变异门禁**（`scripts/mutation_check.py`）：把每处修复**故意改坏**，确认对应测试真的变红
+  —— 没红过的断言只是装饰。锚点命中数不等于 1 会判「跳过」并计入分母，跳过即退出码非 0。
+- 当前实测：`pytest` 290 passed；`ruff` 0 问题、`ruff format --check` 37 文件已格式化；
+  `pyright` 0 errors；变异门禁 **53/53 全部被捕获**（基线全绿，退出码 0）。
 
 ## 口径说明
 
@@ -102,30 +200,6 @@ WAIFU_HEADLINE_TEMPLATE={drawer}, 你今天的群幼老婆是 {partner}（{user_
 只有**报错回执与其它命令**（`今日老婆`/`换一只` 报错、`确认老婆`/`娶老婆`/`离婚` 的回复）
 才 `@` 发命令的那个人。
 
-## 环境变量
-
-`.env` / `.env.prod`（NoneBot 会读取）：
-
-| 变量 | 默认 | 说明 |
-|---|---|---|
-| `WAIFU_DAILY_LIMIT` | `20` | 每天每人抽取次数上限（含首次与每次换一只） |
-| `WAIFU_MAX_PARTNERS` | `1` | 一个人最多能娶几个老婆；**`0` = 不限**；默认 1 |
-| `WAIFU_PENDING_MINUTES` | `3` | **娶老婆**的确认窗口（分钟）；离婚单人即时生效、不受此窗口限制 |
-| `WAIFU_ORIENTATION` | `all` | `normal` 正常（只抽异性）/ `all` 所有（不限，默认）/ `reverse` 相反（只抽同性）；也可写中文 |
-| `WAIFU_HEADLINE_TEMPLATE` | `{drawer}, 你今天的群友老婆是 {partner}（{user_id}）` | 卡片首行文案；生产覆盖为「群幼」 |
-| `WAIFU_CHANGE_CMD` | `换老婆` | 「换老婆」命令词；**生产覆盖为 `换一只`** |
-| `WIFE_SUPERUSERS` | （空） | 「指婚」白名单 QQ 号（逗号/空格分隔）；**生产 = `1330509996`**。⚠️ 键名就是 `WIFE_SUPERUSERS`（**不是** `WAIFU_SUPERUSERS`） |
-| `WAIFU_GRAPH_CMD` | `老婆关系图` | 「老婆关系图」命令词 |
-| `WAIFU_GRAPH_MAX_EDGES` | `60` | 关系图最多画几条关系边（超出截断并在页脚说明）；**上限 60** |
-| `WAIFU_SHOW_QUOTA_IN_CARD` | `true` | 卡片上是否显示「今日已用 N/上限 次」 |
-| `WAIFU_MEMBER_TTL_DAYS` | `0` | 活跃度保留天数；0 = 不淘汰 |
-| `WAIFU_MATCH_PRIORITY` | `5` | 活跃度监听 matcher 优先级（必须 > 命令的 3） |
-| `WAIFU_COMMAND_PRIORITY` | `3` | 「抽」类命令的 matcher 优先级（越小越先） |
-
-> **`WAIFU_MATCH_PRIORITY` 必须大于 `WAIFU_COMMAND_PRIORITY`**：监听是 catch-all，
-> 优先级写反了命令会被监听抢先。写反**不会让插件起不来** —— 只告警并自动把监听优先级
-> 调成 `命令优先级 + 2`。
-
 ## 结果卡片
 
 Chromium（htmlrender）渲染，**首行是成句文案**（见上），正文包含：**QQ号、昵称、头像、性别、最后发言时间**。
@@ -134,46 +208,6 @@ Chromium（htmlrender）渲染，**首行是成句文案**（见上），正文�
 （代理 / Cookie 差异）、失败还可能静默，直接把 http 地址写进模板会得到碎图且无报错。头像取不到时显示占位块。
 渲染整体失败时回退纯文本（字段一致），**绝不表现成「命令没反应」**。
 
-## 依赖
+## 许可
 
-- `nonebot2 >= 2.5`
-- `nonebot-adapter-onebot >= 2.4.6`（OneBot V11）
-- `nonebot-plugin-localstore >= 0.7.4`（数据目录）
-- `tzdata >= 2025.1`（`Asia/Shanghai` 时区数据）
-- `httpx >= 0.26,<1.0`（头像下载）
-- （可选）`nonebot-plugin-htmlrender == 0.6.7` + `playwright install chromium`（结果卡片渲染成图；缺了回退纯文本）
-
-## 安装（宿主以 git 子模块引入）
-
-```bash
-git submodule add -b main https://github.com/xinvxueyuan/nonebot-plugin-waifu.git \
-  vendor/nonebot-plugin-waifu
-git -C vendor/nonebot-plugin-waifu checkout <钉定的 SHA>
-```
-
-宿主 `pyproject.toml`：
-
-```toml
-[tool.nonebot]
-plugin_dirs = ["vendor/nonebot-plugin-waifu/src/plugins"]
-```
-
-`.env` 里加两行（示例，按需改）：
-
-```
-WAIFU_CHANGE_CMD=换一只
-WAIFU_HEADLINE_TEMPLATE={drawer}, 你今天的群幼老婆是 {partner}（{user_id}）
-```
-
-## 开发
-
-```bash
-env -u UV_PYTHON -u UV_PROJECT_ENVIRONMENT -u SSL_CERT_FILE -u VIRTUAL_ENV -u PYTHONPATH uv sync --all-groups
-env -u UV_PYTHON -u UV_PROJECT_ENVIRONMENT -u SSL_CERT_FILE -u VIRTUAL_ENV -u PYTHONPATH uv run pytest tests/ -q
-env -u UV_PYTHON -u UV_PROJECT_ENVIRONMENT -u SSL_CERT_FILE -u VIRTUAL_ENV -u PYTHONPATH uv run ruff check src/ tests/
-env -u UV_PYTHON -u UV_PROJECT_ENVIRONMENT -u SSL_CERT_FILE -u VIRTUAL_ENV -u PYTHONPATH uv run pyright
-```
-
-## License
-
-MIT。
+本仓库**未附加**开源许可证，默认**保留所有权利**（All rights reserved）。如需复用请联系作者。
