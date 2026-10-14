@@ -7,6 +7,34 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-14
+
+### Added
+
+- **第三种关系「喜欢」**：每天抽到的今日老婆自动成为**喜欢**对象 —— **抽取即喜欢，不需要**
+  「确认老婆」（确认仍然只代表「倾心」）；关系图新增**天蓝虚线**（`#0ea5e9`）的「喜欢」边。
+- 关系图**图例**（图 footer 与纯文本回退共用同一条，不再写两遍）：粉色实线=夫妻（双向）·
+  琥珀虚线=倾心（箭头指向被倾心的人）· 蓝色虚线=喜欢（箭头指向被喜欢的人）。
+
+### Changed
+
+- **「离婚」改为单人即时生效**：发一句「离婚 @某人」当场解除，**不再需要双方互相发**，
+  回执里不再有「申请中」态；**「娶老婆」仍为双向确认**，`WAIFU_PENDING_MINUTES`
+  现在只作用于娶老婆（配置描述同步收窄）。
+- 关系图**去重优先级**：同一对人只留一条边、强的胜 —— **夫妻 > 倾心 > 喜欢**；
+  **反向分开看**（A→B 的喜欢与 B→A 的倾心是两条不同的边，都保留）。
+- 关系图**有向边画真箭头**：倾心 / 喜欢的箭头画在**目标端**且永远实线，关系名标签回归两字
+  「倾心」（方向和「→」字符脱钩）。
+- 同对**双向边自动错开**：两条有向边各做垂直偏移（主线与箭头一起挪），不再完全重叠、分得出谁指谁。
+- 关系图数据源接入「喜欢」边：新增 `store.latest_drawn_partners`（每人最近一次抽取），
+  由「老婆关系图」命令喂给 `relations.build_relations(likes=...)`。
+- 变异门禁扩充：新增的关系边 / 喜欢链路的代码路径一并纳入变异检查范围。
+
+### Fixed
+
+- **关系图方向标注不明确**（用户反馈「倾心→」这个字符不够清楚）：改为在**目标端画真箭头**，
+  标签从「倾心→」改回两字「倾心」——「谁倾心谁」看图即得，不用猜字符含义。
+
 ## [0.3.1] - 2026-10-14
 
 ### Fixed
@@ -105,7 +133,8 @@
 - 容灾：状态全部落 sqlite（stdlib `sqlite3`），启动时重放并清理过期的待确认请求。
 - 渲染整体失败时回退纯文本（字段一致），不会表现成「命令没反应」。
 
-[Unreleased]: https://github.com/xinvxueyuan/nonebot-plugin-waifu/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/xinvxueyuan/nonebot-plugin-waifu/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/xinvxueyuan/nonebot-plugin-waifu/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/xinvxueyuan/nonebot-plugin-waifu/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/xinvxueyuan/nonebot-plugin-waifu/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/xinvxueyuan/nonebot-plugin-waifu/compare/v0.1.0...v0.2.0
