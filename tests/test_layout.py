@@ -144,14 +144,15 @@ def test_star_cluster_never_has_two_collinear_edges():
                 assert abs(cross) > 1e-6, f"{members} 成员簇里有共线的两条边"
 
 
-def test_label_chip_is_centered_on_a_horizontal_edge():
-    """水平边的 chip 压在中点居中（两个头像之间是空的，不会撞名字）。"""
+def test_label_chip_bottom_edge_sits_on_a_horizontal_edge():
+    """水平边的 chip：**底边中点在线上**、且压在中点（用户 2026-10-14 口径）。"""
     lay = _l()
     (cluster,) = lay.layout_graph(_mk((1, 2, "m")), focus=None)
     (line,) = cluster.lines
-    lx, ly = lay._label_pos(line, cluster.nodes)
-    assert abs((lx + lay.CHIP_W / 2) - (line.x + line.w / 2)) <= 1
-    assert abs((ly + lay.CHIP_H / 2) - (line.y + line.h / 2)) <= 1
+    ax = line.label_x + lay.CHIP_W / 2
+    ay = line.label_y + lay.CHIP_H
+    assert abs(ax - (line.x + line.w / 2)) <= 1
+    assert abs(ay - (line.y + line.h / 2)) <= 1
 
 
 def test_label_chip_never_covers_a_name_band():
@@ -228,60 +229,44 @@ def _ends(line):
     )
 
 
-def _tip_and_far(wing, near):
-    """（尖端, 后端）：离目标节点中心近的那端是尖端，另一端是回折后的后端。"""
-    a, b = _ends(wing)
-    return (a, b) if _dist(a, near) < _dist(b, near) else (b, a)
+def test_marriage_has_no_ports_but_crush_and_like_do():
+    """端口圆按**有向性**给：夫妻（无向）没有；倾心/喜欢两端各一个（起点实心、终点空心）。
 
-
-def test_marriage_has_no_arrow_but_crush_and_like_do():
-    """箭头按**有向性**给：夫妻（无向）不画；倾心/喜欢（有向）dst 端画两翼。"""
+    用户 2026-10-14：「不要箭头了，线条两边一个空心圆一个实心圆，作为节点的端口」。
+    """
     lay = _l()
     (marriage,) = lay.layout_graph(_dg((1, 2, "marriage")), focus=None)
-    assert marriage.arrows == ()
+    assert marriage.ports == ()
     for kind in ("crush", "like"):
         (cluster,) = lay.layout_graph(_dg((1, 2, kind)), focus=None)
-        assert len(cluster.arrows) == 2, f"{kind} 边应有 dst 端两翼"
+        assert len(cluster.ports) == 2, f"{kind} 边两端应各有一个端口圆"
+        assert sorted(p.filled for p in cluster.ports) == [False, True]
 
 
-def test_arrow_wings_are_11px_at_155_degrees_folded_back_from_the_tip():
-    """箭头两翼几何：翼长 ~11px、与主线夹角 ~155°、从尖端**回折**（背离 dst 节点）。"""
-    lay = _l()
-    (cluster,) = lay.layout_graph(_dg((1, 2, "crush")), focus=None)
-    boxes = {n.uid: n for n in cluster.nodes}
-    (line,) = cluster.lines
-    dst = (boxes[2].cx, boxes[2].cy)
-    tips = []
-    for wing in cluster.arrows:
-        tip, far = _tip_and_far(wing, dst)
-        assert abs(_dist(tip, far) - 11) <= 1.5, "翼长应为 ~11px"
-        spread = abs(wing.angle - line.angle) % 360
-        spread = min(spread, 360 - spread)
-        assert abs(spread - 155) <= 1.0, f"翼与主线夹角应 ~155°，实测 {spread:.2f}"
-        assert _dist(far, dst) > _dist(tip, dst), "两翼必须从尖端向后回折"
-        tips.append(tip)
-    assert abs(_dist(tips[0], tips[1])) <= 1.5, "两翼应共用同一个尖端"
-    # 尖端落在主线 dst 端：离目标箱心 AVATAR/2+GAP —— 离头像 14px，**不插进头像**
-    tip = tips[0]
-    assert abs(_dist(tip, dst) - (lay.AVATAR / 2 + lay.GAP)) <= 2
-
-
-def test_arrow_points_at_the_dst_node_not_the_src():
-    """**箭头指向被倾心/被喜欢的人**：两翼的每个端点都更靠近 dst 而不是 src。"""
+def test_ports_sit_on_the_two_line_ends_with_filled_at_src():
+    """**实心圆在上游端（发起方）、空心圆在下游端（被指向的一方）** —— 方向靠它读。"""
     lay = _l()
     for kind in ("crush", "like"):
         (cluster,) = lay.layout_graph(_dg((3, 7, kind)), focus=None)
         boxes = {n.uid: n for n in cluster.nodes}
-        dst = (boxes[7].cx, boxes[7].cy)
         src = (boxes[3].cx, boxes[3].cy)
-        assert cluster.arrows
-        for wing in cluster.arrows:
-            for point in _ends(wing):
-                assert _dist(point, dst) < _dist(point, src)
+        dst = (boxes[7].cx, boxes[7].cy)
+        (solid,) = [p for p in cluster.ports if p.filled]
+        (hollow,) = [p for p in cluster.ports if not p.filled]
+        assert _dist((solid.cx, solid.cy), src) < _dist((solid.cx, solid.cy), dst)
+        assert _dist((hollow.cx, hollow.cy), dst) < _dist((hollow.cx, hollow.cy), src)
+        # 两边都落在线上（端点 = 离节点盒心 AVATAR/2 + GAP）
+        (line,) = cluster.lines
+        for p in cluster.ports:
+            assert _perp_dist((p.cx, p.cy), line) <= 2
+            assert (
+                abs(_dist((p.cx, p.cy), src) - (lay.AVATAR / 2 + lay.GAP)) <= 2
+                or abs(_dist((p.cx, p.cy), dst) - (lay.AVATAR / 2 + lay.GAP)) <= 2
+            )
 
 
-def test_arrow_wings_stay_clear_of_every_avatar():
-    """箭头不插进任何头像：翼上各点离**每个**节点中心 ≥ 头像半径 + 6px 余量。"""
+def test_ports_stay_clear_of_every_avatar():
+    """端口圆不插进头像：**圆边**离每个节点中心 ≥ 头像半径 + 4px 余量。"""
     lay = _l()
     graphs = (
         _dg((1, 2, "marriage"), (1, 3, "crush"), (1, 4, "like")),
@@ -290,12 +275,12 @@ def test_arrow_wings_stay_clear_of_every_avatar():
     for g in graphs:
         for cluster in lay.layout_graph(g, focus=None):
             centers = [(n.cx, n.cy) for n in cluster.nodes]
-            for wing in cluster.arrows:
-                a, b = _ends(wing)
-                mid = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
-                for point in (a, b, mid):
-                    for c in centers:
-                        assert _dist(point, c) >= lay.AVATAR / 2 + 6
+            for port in cluster.ports:
+                for c in centers:
+                    edge = _dist((port.cx, port.cy), c) - lay.PORT_D / 2
+                    assert edge >= lay.AVATAR / 2 + 4, (
+                        f"端口圆插进了 uid={c} 的头像（圆边距 {edge:.1f}px）"
+                    )
 
 
 def test_double_directed_pair_gets_parallel_lines_and_separated_chips():
@@ -306,7 +291,7 @@ def test_double_directed_pair_gets_parallel_lines_and_separated_chips():
     lay = _l()
     (cluster,) = lay.layout_graph(_dg((1, 2, "crush"), (2, 1, "like")), focus=None)
     assert len(cluster.lines) == 2
-    assert len(cluster.arrows) == 4  # 每条线 dst 端各两翼
+    assert len(cluster.ports) == 4  # 每条线两端各一个端口圆
     l1, l2 = cluster.lines
     assert abs((l1.angle - l2.angle) % 180) < 1e-6  # 共轴（A→B 与 B→A 反向）
     mid1 = (l1.y + l1.h / 2, l2.y + l2.h / 2)
@@ -316,17 +301,15 @@ def test_double_directed_pair_gets_parallel_lines_and_separated_chips():
     sides = sorted(round((ln.y + ln.h / 2) - axis) for ln in cluster.lines)
     assert sides[0] < 0 < sides[1], "两条线要分居轴线两侧（一个 +7 一个 −7）"
     assert abs(abs(sides[0]) - abs(sides[1])) <= 2
-    # 两个 chip：互不重叠，且各自盖住自己那条线（没盖住对面那条）
+    # 两个 chip：互不重叠，各自**底边中点**落在自己那条线上（靠不同 t 错开）
     rects = [
         (ln.label_x, ln.label_y, ln.label_x + lay.CHIP_W, ln.label_y + lay.CHIP_H)
         for ln in cluster.lines
     ]
     assert not _overlaps(rects[0], rects[1]), "同对双线的 chip 互相压住了"
-    for i, ln in enumerate(cluster.lines):
-        own = ln.y + ln.h / 2
-        other = cluster.lines[1 - i].y + cluster.lines[1 - i].h / 2
-        assert rects[i][1] <= own <= rects[i][3]
-        assert not (rects[i][1] <= other <= rects[i][3])
+    for ln in cluster.lines:
+        anchor = (ln.label_x + lay.CHIP_W / 2, ln.label_y + lay.CHIP_H)
+        assert _perp_dist(anchor, ln) <= 2, "chip 底边中点必须落在自己那条线上"
 
 
 def test_single_directed_edge_is_not_offset():
@@ -339,3 +322,122 @@ def test_single_directed_edge_is_not_offset():
         mid = (line.x + line.w / 2, line.y + line.h / 2)
         axis = ((boxes[1].cx + boxes[2].cx) / 2, (boxes[1].cy + boxes[2].cy) / 2)
         assert abs(mid[0] - axis[0]) <= 1.5 and abs(mid[1] - axis[1]) <= 1.5
+
+
+# --------------------------------------------------------------------------- #
+# 用户 2026-10-14（三）：「乱七八糟的连线都对不齐」——
+# 标签必须**贴在自己的线上**（旧的沿法线推 31px 是根因），且不许压任何节点盒。
+# --------------------------------------------------------------------------- #
+#: 覆盖：水平对 / 3-6 人扇形 / 链 / 双有向边 / 大簇（生产同形）
+_LABEL_SHAPES = (
+    ((1, 2, "m"),),
+    ((1, 2, "m"), (1, 3, "m"), (1, 4, "m")),
+    ((1, 2, "m"), (1, 3, "m"), (1, 4, "m"), (1, 5, "m"), (1, 6, "m")),
+    ((1, 2, "m"), (2, 3, "m"), (4, 5, "m")),
+    ((1, 2, "c"), (2, 1, "k")),
+    ((1, 2, "c"), (2, 1, "k"), (5, 6, "k")),
+    ((1, 2, "k"), (1, 3, "k"), (1, 4, "k"), (1, 5, "k"), (1, 6, "k"), (1, 7, "k")),
+)
+
+
+def _chip_center(line, lay):
+    return (line.label_x + lay.CHIP_W / 2, line.label_y + lay.CHIP_H)
+
+
+def _perp_dist(point, line):
+    """点到线段（用 bbox + angle 还原两端）的垂距；落在线外时取到端点的距离。"""
+    (a, b) = _ends(line)
+    ax, ay = a
+    bx, by = b
+    dx, dy = bx - ax, by - ay
+    ll = dx * dx + dy * dy
+    t = ((point[0] - ax) * dx + (point[1] - ay) * dy) / ll if ll else 0.0
+    t = max(0.0, min(1.0, t))
+    return math.hypot(point[0] - (ax + t * dx), point[1] - (ay + t * dy))
+
+
+def test_label_chip_bottom_edge_lies_on_its_own_line_in_every_shape():
+    """**chip 底边中点必须落在自己那条线上**（垂距 ≤ 2px）。
+
+    实拍「连线都对不齐」的回归钉。
+
+    用户 2026-10-14：「标签改为底线贴在线上，文本跟随线条旋转，文本底部贴靠在线条上」。
+    旧实现把非水平线的 chip 沿**法线**推开 31px，标签看着不属于任何一条线。
+    """
+    lay = _l()
+    for shape in _LABEL_SHAPES:
+        for cluster in lay.layout_graph(_mk(*shape), focus=None):
+            for line in cluster.lines:
+                anchor = _chip_center(line, lay)
+                d = _perp_dist(anchor, line)
+                assert d <= 2, (
+                    f"{shape} 的 {line.src}->{line.dst} 标签离线 {d:.1f}px"
+                    "（chip 底边中点必须压在线上）"
+                )
+
+
+def _rot_chip_aabb(line, lay):
+    """关系名 chip **旋转后**的 AABB（锚点 = 底边中点）。
+
+    与 `layout._label_pos` 的碰撞口径一致。
+    """
+    rad = math.radians(lay.label_rotation(line.angle))
+    cos_r, sin_r = math.cos(rad), math.sin(rad)
+    ax, ay = _chip_center(line, lay)
+    xs: list[float] = []
+    ys: list[float] = []
+    for cx, cy in (
+        (-lay.CHIP_W / 2, 0.0),
+        (lay.CHIP_W / 2, 0.0),
+        (lay.CHIP_W / 2, -lay.CHIP_H),
+        (-lay.CHIP_W / 2, -lay.CHIP_H),
+    ):
+        xs.append(ax + cx * cos_r - cy * sin_r)
+        ys.append(ay + cx * sin_r + cy * cos_r)
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def test_label_chip_never_covers_a_node_box_in_every_shape():
+    """**chip（旋转后）不许压任何节点盒**。
+
+    比「不压名字带」更强的口径 —— 头像也不能压。
+    """
+    lay = _l()
+    for shape in _LABEL_SHAPES:
+        for cluster in lay.layout_graph(_mk(*shape), focus=None):
+            for line in cluster.lines:
+                chip = _rot_chip_aabb(line, lay)
+                for box in cluster.nodes:
+                    assert not _overlaps(
+                        chip, (box.x, box.y, box.x + box.w, box.y + box.h)
+                    ), (
+                        f"{shape} 的 {line.src}->{line.dst}"
+                        f" chip 压在 uid={box.uid} 的节点盒上"
+                    )
+
+
+def test_label_pos_slides_off_a_node_box_sitting_on_the_line():
+    """线段正中摆一个节点盒 → chip 必须**沿线上滑开**，不许压在盒上，也不许离线。
+
+    （这正是 `blocked` 里那串节点盒存在的意义：MN26「不避让节点盒」必须变红。）
+    """
+    lay = _l()
+    line = lay.EdgeLine(
+        kind="crush",
+        src=1,
+        dst=2,
+        x=0,
+        y=-2,
+        w=400,
+        h=4,
+        angle=0.0,
+        label_x=0,
+        label_y=0,
+    )
+    on_line = lay.NodeBox(uid=9, x=170, y=-50, w=96, h=96)  # 正中，跨在线上下
+    lx, ly = lay._label_pos(line, [on_line])
+    chip = (lx, ly, lx + lay.CHIP_W, ly + lay.CHIP_H)
+    box = (on_line.x, on_line.y, on_line.x + on_line.w, on_line.y + on_line.h)
+    assert not _overlaps(chip, box), "chip 压在了线上的节点盒上"
+    anchor = (lx + lay.CHIP_W / 2, ly + lay.CHIP_H)
+    assert _perp_dist(anchor, line) <= 2, "滑开 ≠ 离线"

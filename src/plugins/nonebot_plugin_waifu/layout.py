@@ -14,13 +14,16 @@
 `min == PAD`、并按内容范围定宽高 —— 任何形态都不会留大片空白（实拍里 4 个簇
 各占 504px 高，其中大半是空白）。
 
-标签 chip 的位置由 `_label_pos` 定：**不与任何节点的名字带相交**（用户实拍：
-「文字都和图重叠了」）。
+标签 chip 的位置由 `_label_pos` 定：**永远贴在自己的线上**（法向偏移 0，需要时只沿
+**这条线**前后滑）—— 用户实拍（2026-10-14）：「乱七八糟的连线都对不齐」：
+旧实现把非水平线的 chip 沿法线推开 ~31px，标签看着不属于任何一条线；同时 chip
+不得压到节点盒（含名字带）或另一个 chip。
 
-**有向边（倾心/喜欢）在 dst 端画箭头**（`_arrow_wings`，两翼各 11px、与主线夹角
-±155°，实线）—— 方向不敢再靠标签里的「→」字符（用户 2026-10-14：
-「倾心→」不够明确，要真箭头指向被倾心的人）。同一对人的两条有向边（A→B 与 B→A）
-各自垂直错开 ±`PAIR_LINE_OFFSET`（`_pair_shifts`），否则两条线完全重叠、分不出谁指谁。
+**有向边（倾心/喜欢）不画箭头，改画「端口圆」**（`_port_marks`）：**起点实心圆、
+终点空心圆**，就放在线的两端（离节点盒心 `AVATAR/2 + GAP`）—— 用户 2026-10-14：
+「不要箭头了，线条两边一个空心圆一个实心圆，作为节点的端口」。同一对人的两条有向边
+（A→B 与 B→A）各自垂直错开 ±`PAIR_LINE_OFFSET`（`_pair_shifts`），否则两条线完全重叠、
+分不出谁指谁。
 
 所有数值都是**确定性**的（同一输入必得同一坐标）—— 否则测试与实拍对不上。
 """
@@ -40,24 +43,28 @@ NODE_W: Final[int] = 96  # 节点盒宽（头像 64 + 名字行留白）
 AVATAR: Final[int] = 64  # 头像直径
 NODE_H: Final[int] = 96  # 节点盒高
 CANVAS_W: Final[int] = 600  # 历史画布宽（坐标已改成按内容归一化，仅作参考常量保留）
-MIN_RING_R: Final[int] = 150  # 环半径下限（线太短会看不见）
-MAX_RING_R: Final[int] = 220  # 环半径上限
-RING_BASE: Final[int] = 96  # 环半径 = RING_BASE + RING_PER_NODE * 环上人数
-RING_PER_NODE: Final[int] = 26
+#: 环半径（px）：**必须让「hub→环上节点」的边塞得下一个关系名 chip**（`CHIP_W`=60）。
+#: 边两端各让 `AVATAR/2 + GAP`（46px）→ R = 46*2 + 128 = 220。实测：128px 的边上
+#: chip 贴着自己的线且不碰两端头像盒；半径 150（边只有 58px）时 chip 比线还宽，
+#: 只能压头像或漂到线外 —— 用户 2026-10-14 实拍「乱七八糟的连线都对不齐」。
+RING_R: Final[int] = 220
 GAP: Final[int] = 14  # 线段端点与头像之间的空隙（22 → 14：线要真的露出来）
 PAD: Final[int] = 24  # 簇内容到簇边界的留白
 PAIR_SPAN: Final[int] = 260  # 2 成员簇：两节点中心的水平距离
-CHIP_W: Final[int] = 60  # 关系名 chip 宽（与 render 的 .elab 对齐）
-CHIP_H: Final[int] = 26  # 关系名 chip 高
-CHIP_GAP: Final[int] = 2  # 同对双线两个 chip 之间要留的最小缝（去重叠后）
+CHIP_W: Final[int] = 46  # 关系名 chip 宽（14px 两字 + 内边距；与 render 的 .elab 对齐）
+CHIP_H: Final[int] = 24  # 关系名 chip 高（14px 文字 + 内边距）
 NAME_BAND_H: Final[int] = 32  # 节点盒底部的「名字带」高度（名字行 24 + 余量）
+#: chip 沿线滑动的搜索范围与步长（线段参数 t ∈ [lo, hi]，步长 2% 线段长）：
+#: 候选点多，挤在一起的标签才能各自沿线让开（只有 9 个固定点时最后一枚会挤不出去）。
+LABEL_SLIDE_RANGE: Final[tuple[float, float]] = (0.02, 0.98)
+LABEL_SLIDE_STEP: Final[float] = 0.02
 FAN_MIN_SPREAD: Final[float] = 120.0  # 扇形张角下限（度）
 FAN_SPREAD_STEP: Final[float] = 40.0  # 环上每多一人张角加多少度
 FAN_MAX_SPREAD: Final[float] = 300.0  # 扇形张角上限（度）
 DECOLLINEAR_DEG: Final[float] = 2.0  # 去共线兜底：两条边正好相差 180° 时错开多少
 PAIR_LINE_OFFSET: Final[float] = 7.0  # 同对有向双线：各自垂直偏移 ±7px（单边为 0）
-ARROW_WING_LEN: Final[float] = 11.0  # 箭头翼长（px）
-ARROW_WING_DEG: Final[float] = 155.0  # 翼与主线（前进方向）的夹角（度）
+#: 有向边的**端口圆**直径（px，与 render 的 `.port` 对齐）：起点实心、终点空心。
+PORT_D: Final[int] = 12
 
 _NO_SHIFT: Final[tuple[float, float]] = (0.0, 0.0)  # 不做双线错开时的垂直偏移
 
@@ -94,6 +101,22 @@ class EdgeLine:
 
 
 @dataclass(frozen=True)
+class PortMark:
+    """有向边**两端的端口圆**：起点实心（`filled=True`）、终点空心。
+
+    用户 2026-10-14：「不要箭头了，线条两边一个空心圆一个实心圆，作为节点的端口」。
+    `cx/cy` = 圆心；`src/dst` 沿用主线（渲染取配色、测试定位用）。
+    """
+
+    kind: str
+    src: int
+    dst: int
+    cx: int
+    cy: int
+    filled: bool
+
+
+@dataclass(frozen=True)
 class ClusterLayout:
     hub: int
     caption: str
@@ -101,9 +124,9 @@ class ClusterLayout:
     lines: tuple[EdgeLine, ...]
     width: int
     height: int
-    #: dst 端箭头两翼（只对**有向边**：倾心/喜欢；夫妻无向、没有箭头）。
+    #: 有向边两端的端口圆（倾心/喜欢各两个；夫妻无向、没有端口）。
     #: 单独一列而不是并进 `lines` —— 它们没有关系名 chip、也不参与「几条关系」的计数。
-    arrows: tuple[EdgeLine, ...] = ()
+    ports: tuple[PortMark, ...] = ()
 
 
 def _box(cx: float, cy: float, uid: int) -> NodeBox:
@@ -128,11 +151,6 @@ def _shift_line(line: EdgeLine, dx: int, dy: int) -> EdgeLine:
         label_x=line.label_x + dx,
         label_y=line.label_y + dy,
     )
-
-
-def _ring_radius(n: int) -> int:
-    """环半径：人越多圈越大（夹在 `[MIN_RING_R, MAX_RING_R]`）——线太短会看不见。"""
-    return max(MIN_RING_R, min(MAX_RING_R, RING_BASE + RING_PER_NODE * n))
 
 
 def _angle_between(a: float, b: float) -> float:
@@ -188,35 +206,18 @@ def _segment(
     )
 
 
-def _arrow_wings(
-    edge: RelationEdge, tip_x: float, tip_y: float, ux: float, uy: float
-) -> tuple[EdgeLine, EdgeLine]:
-    """有向边的 dst 端箭头：尖端 = 主线 dst 端点，两翼各 `ARROW_WING_LEN` 长。
+def _port_marks(
+    edge: RelationEdge, src_x: float, src_y: float, dst_x: float, dst_y: float
+) -> tuple[PortMark, PortMark]:
+    """有向边两端的端口圆：**起点实心、终点空心**（用户 2026-10-14 口径）。
 
-    翼与主线的夹角 = ±`ARROW_WING_DEG`：两翼从尖端向**后**回折
-    （朝 src 方向偏 ±25°）——标准箭头两笔，方向由它承担
-    （用户 2026-10-14：标签里的「→」字符不够明确）。翼只在这里定位，
-    实线由 render 侧保证（`dashes=1`）—— 虚线主线的 dst 端也要看得清。
-
-    `src/dst` 沿用主线的（翼只借这个字段取配色/粗细）；方向看 `angle`。
+    圆心就落在主线的两个端点上（离节点盒心 `AVATAR/2 + GAP` = 46px，离头像 14px）
+    —— 落在节点盒边界内的 2px 处，看着像插在节点上的「端口」。
     """
-    wings: list[EdgeLine] = []
-    for sign in (1.0, -1.0):
-        rad = math.radians(sign * ARROW_WING_DEG)
-        wx = ux * math.cos(rad) - uy * math.sin(rad)
-        wy = ux * math.sin(rad) + uy * math.cos(rad)
-        wings.append(
-            _segment(
-                edge.kind,
-                edge.src,
-                edge.dst,
-                tip_x,
-                tip_y,
-                tip_x + wx * ARROW_WING_LEN,
-                tip_y + wy * ARROW_WING_LEN,
-            )
-        )
-    return (wings[0], wings[1])
+    return (
+        PortMark(edge.kind, edge.src, edge.dst, round(src_x), round(src_y), True),
+        PortMark(edge.kind, edge.src, edge.dst, round(dst_x), round(dst_y), False),
+    )
 
 
 def _draw_edge(
@@ -225,15 +226,14 @@ def _draw_edge(
     edge: RelationEdge,
     *,
     shift: tuple[float, float] = _NO_SHIFT,
-) -> tuple[EdgeLine, tuple[EdgeLine, ...]]:
-    """一条边的全部线段：主线段 + dst 端箭头两翼。
+) -> tuple[EdgeLine, tuple[PortMark, ...]]:
+    """一条边的全部图元：主线段 + 两端端口圆（有向边才有）。
 
     主线段 = a 箱心到 b 箱心、两端各缩进 `AVATAR/2 + GAP`。
 
-    - `shift`：同对有向双线的垂直错开（见 `_pair_shifts`）—— 主线和箭头一起挪。
-    - 尖端 = 主线 dst 端点：离目标箱心 `AVATAR/2 + GAP`（46px）——比 96 盒边界（48px）
-      再向节点让 2px、离头像 14px，**不插进头像**（`AVATAR/2 = 32px`）。
-      再让 6px 会让主线端点戳出尖端 4px（或把箭头与线拉出缝），故不取。
+    - `shift`：同对有向双线的垂直错开（见 `_pair_shifts`）—— 主线和端口一起挪。
+    - 端点 = 离箱心 `AVATAR/2 + GAP`（46px）——比 96 盒边界（48px）再向节点让 2px、
+      离头像 14px，**不插进头像**（`AVATAR/2 = 32px`）；端口圆的圆心就落在这里。
     - `label_x/label_y` 先留 0 —— chip 的位置要看到**整簇**的节点盒才能定
       （见 `_label_pos` 与 `_labelled`）。
     """
@@ -247,7 +247,7 @@ def _draw_edge(
     line = _segment(edge.kind, edge.src, edge.dst, x0, y0, x1, y1)
     if not edge.directed:
         return line, ()
-    return line, _arrow_wings(edge, x1, y1, ux, uy)
+    return line, _port_marks(edge, x0, y0, x1, y1)
 
 
 def _pair_shifts(
@@ -278,107 +278,127 @@ def _pair_shifts(
     return out
 
 
-def _name_band(box: NodeBox) -> tuple[float, float, float, float]:
-    """节点盒底部的「名字带」矩形：名字画在头像**下方**，chip 不许压它。"""
-    return (box.x, box.y + box.h - NAME_BAND_H, box.x + box.w, box.y + box.h)
-
-
-def _overlaps(
+def _overlap_area(
     a: tuple[float, float, float, float], b: tuple[float, float, float, float]
-) -> bool:
-    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+) -> float:
+    """两个矩形的相交面积（0 = 不相交）；chip 落点打分用。"""
+    w = min(a[2], b[2]) - max(a[0], b[0])
+    h = min(a[3], b[3]) - max(a[1], b[1])
+    return w * h if w > 0 and h > 0 else 0.0
+
+
+def _rotated_chip_aabb(
+    ax: float, ay: float, angle: float, w: int = CHIP_W, h: int = CHIP_H
+) -> tuple[float, float, float, float]:
+    """关系名 chip **旋转后**的 AABB：锚点 = 底边中点（盒在锚点**上方** `h`）。
+
+    碰撞判定与 `taken` 都用这个形状 —— 用未旋转矩形去比会漏（斜线上的 chip
+    旋转后 AABB 明显更大，实测会漏出几百 px² 的重叠）。
+    """
+    rot = math.radians(label_rotation(angle))
+    cos_r, sin_r = math.cos(rot), math.sin(rot)
+    xs: list[float] = []
+    ys: list[float] = []
+    for cor_x, cor_y in ((-w / 2, 0.0), (w / 2, 0.0), (w / 2, -h), (-w / 2, -h)):
+        xs.append(ax + cor_x * cos_r - cor_y * sin_r)
+        ys.append(ay + cor_x * sin_r + cor_y * cos_r)
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _label_ts(t_hint: float) -> tuple[float, ...]:
+    """关系名 chip 沿线滑动的候选 `t`：先给 `t_hint`，再按「离它多远」细扫整条线。
+
+    候选点多（≈45 个）才挤得下 —— 9 个固定点时，密集簇里最后一枚标签会找不到
+    空位、退回「压一点点」的兜底解。
+    """
+    lo, hi = LABEL_SLIDE_RANGE
+    span = round((hi - lo) / LABEL_SLIDE_STEP)
+    grid = [lo + i * LABEL_SLIDE_STEP for i in range(span + 1)]
+    grid.append(min(max(t_hint, lo), hi))
+    return tuple(sorted(grid, key=lambda t: (abs(t - t_hint), t)))
+
+
+def label_rotation(angle: float) -> float:
+    """标签的旋转角：跟着线条走，但**永远正着读**（不上下颠倒）。
+
+    角度是 src→dst 的方向；超出 ±90° 时翻 180°（关系名两字左右对称，翻转无副作用）。
+    layout 用它算 chip 的旋转后 AABB（碰撞判定必须与渲染出来的形状一致），
+    render 用它写 `transform:rotate()` —— 两处**必须同源**。
+    """
+    a = (angle + 180.0) % 360.0 - 180.0  # → (-180, 180]
+    if a > 90.0:
+        return a - 180.0
+    if a <= -90.0:
+        return a + 180.0
+    return a
 
 
 def _label_pos(
     line: EdgeLine,
     boxes: Sequence[NodeBox],
     chip: tuple[int, int] = (CHIP_W, CHIP_H),
-    side: float = 1.0,
+    *,
+    t_hint: float = 0.5,
+    taken: Sequence[tuple[float, float, float, float]] = (),
 ) -> tuple[int, int]:
     """关系名 chip 的左上角（**纯函数**，可单测）。
 
-    - 线段接近水平（`|dy| < 0.35*|dx|`，含完全水平）→ chip 居中压在中点：
-      水平对形态下名字在头像下方、两个头像之间是空的，压中点最省地方。
-    - 否则沿边 **t=0.40** 处取基点、沿法线偏出 `chip_h/2 + 18px`；若压到任何
-      节点的名字带就再多推 12px（最多 3 轮）——用户实拍：「文字都和图重叠了」。
-    - `side`：法线方向（±1）。同对双线的 chip 要镜到**自己线的外侧**
-      （见 `_labelled`），否则会压到另一条线 dst 端的箭头。
+    **chip 的底边贴在自己这条线上、并跟着线旋转**（用户 2026-10-14：「标签改为底线
+    贴在线上，文本跟随线条旋转，文本底部贴靠在线条上」）：
+    锚点 = 线段上的一点，chip 的**底边中点**放在锚点上，再整体按 `label_rotation`
+    转过去（渲染的 `transform-origin` 就是底边中点）。锚点默认取线段中点，与
+    节点盒（含名字带）或已放好的 chip 冲突时，按 `LABEL_SLIDE_TS` **沿线前后滑**。
+
+    Args:
+        line: 这条边的主线段（用它的 bbox + angle 还原真方向）。
+        boxes: 本簇所有节点盒（chip 不许压上去）。
+        chip: chip 尺寸 `(宽, 高)`，默认 `(CHIP_W, CHIP_H)`。
+        t_hint: 第一个候选位置（同对双线用 0.30：两条线方向相反，同一个 t 会
+            自然落到**两端**，不重叠）。
+        taken: 本簇已放置的 chip 矩形（旋转后的 AABB，互不重叠）。
     """
     cw, ch = chip
     rad = math.radians(line.angle)
-    # ⚠️ bbox 丢了方向的正负号（w/h 都是正的），真方向要从 angle 还原 ——
-    # 否则 chip 会被推到线段的另一侧（法线符号反了）。
+    # ⚠️ bbox 丢了方向的正负号（w/h 都是正的），真方向要从 angle 还原。
     dx = math.copysign(line.w, math.cos(rad))
     dy = math.copysign(line.h, math.sin(rad))
     mx, my = line.x + line.w / 2, line.y + line.h / 2  # bbox 中心 = 线段中点
-    if abs(dy) < 0.35 * abs(dx):
-        lx, ly = mx - cw / 2, my - ch / 2
-    else:
-        bx, by = mx - 0.10 * dx, my - 0.10 * dy  # t=0.40（相对 src 端）
-        dist = math.hypot(dx, dy) or 1.0
-        nx, ny = -dy / dist * side, dx / dist * side  # 法线方向
-        lx = bx + nx * (ch / 2 + 18) - cw / 2
-        ly = by + ny * (ch / 2 + 18) - ch / 2
-        for _ in range(3):
-            if not any(
-                _overlaps((lx, ly, lx + cw, ly + ch), _name_band(b)) for b in boxes
-            ):
-                break
-            lx, ly = lx + nx * 12, ly + ny * 12
-    return round(lx), round(ly)
+    blocked = [(b.x, b.y, b.x + b.w, b.y + b.h) for b in boxes]
+    blocked += list(taken)
+
+    order = _label_ts(t_hint)
+    best: tuple[float, tuple[int, int]] | None = None
+    for t in order:
+        ax, ay = mx + (t - 0.5) * dx, my + (t - 0.5) * dy
+        lx, ly = ax - cw / 2, ay - ch
+        box = _rotated_chip_aabb(ax, ay, line.angle, cw, ch)
+        bad = sum(_overlap_area(box, other) for other in blocked)
+        if bad == 0:
+            return round(lx), round(ly)
+        if best is None or bad < best[0]:
+            best = (bad, (round(lx), round(ly)))
+    # 全撞：交给打分最小的那个（宁可压一点点，也不离线）
+    assert best is not None
+    return best[1]
 
 
 def _labelled(
-    line: EdgeLine, boxes: Sequence[NodeBox], *, side: float = 1.0
+    line: EdgeLine,
+    boxes: Sequence[NodeBox],
+    *,
+    t_hint: float = 0.5,
+    taken: Sequence[tuple[float, float, float, float]] = (),
 ) -> EdgeLine:
-    """给线段补上关系名 chip 的左上角（chip 不与任何节点的名字带相交）。
-
-    `side` 只在**同对双线**时为 −1（把 chip 镜到线的外侧），单边保持默认。
-    """
-    lx, ly = _label_pos(line, boxes, side=side)
+    """给线段补上关系名 chip 的左上角（**贴着这条线**，规则见 `_label_pos`）。"""
+    lx, ly = _label_pos(line, boxes, t_hint=t_hint, taken=taken)
     return replace(line, label_x=lx, label_y=ly)
 
 
 def _chip_rect(line: EdgeLine) -> tuple[float, float, float, float]:
-    return (line.label_x, line.label_y, line.label_x + CHIP_W, line.label_y + CHIP_H)
-
-
-def _shift_label(line: EdgeLine, dx: int, dy: int) -> EdgeLine:
-    return replace(line, label_x=line.label_x + dx, label_y=line.label_y + dy)
-
-
-def _deoverlap_pair_chips(lines: list[EdgeLine], idxs: Sequence[int]) -> None:
-    """同对双线的两个 chip 会互相压住 → 沿**公共法线**推开到不重叠。
-
-    推开后至少留 `CHIP_GAP` 的缝。两条线只隔 `2 * PAIR_LINE_OFFSET`（14px），
-    而 chip 高 `CHIP_H`（26px）—— chip 只跟着线挪 7px 还不够，必须再错开。
-    跨对的 chip 相隔很远，不在这里处理。
-    """
-    if len(idxs) < 2:
-        return
-    rad = math.radians(lines[idxs[0]].angle)
-    nx, ny = -math.sin(rad), math.cos(rad)
-    for _ in range(4):
-        hit = False
-        for i, ai in enumerate(idxs):
-            for bi in idxs[i + 1 :]:
-                ca, cb = _chip_rect(lines[ai]), _chip_rect(lines[bi])
-                if not _overlaps(ca, cb):
-                    continue
-                hit = True
-                ext = abs(nx) * CHIP_W + abs(ny) * CHIP_H  # chip 在 n 方向的投影长度
-                ax, ay = (ca[0] + ca[2]) / 2, (ca[1] + ca[3]) / 2
-                bx, by = (cb[0] + cb[2]) / 2, (cb[1] + cb[3]) / 2
-                gap = abs((bx - ax) * nx + (by - ay) * ny)
-                push = round((ext + CHIP_GAP - gap) / 2)
-                if push <= 0:
-                    continue
-                lines[ai] = _shift_label(
-                    lines[ai], round(-nx * push), round(-ny * push)
-                )
-                lines[bi] = _shift_label(lines[bi], round(nx * push), round(ny * push))
-        if not hit:
-            return
+    """chip（**旋转后**）的 AABB —— 与 `_label_pos` 的碰撞口径同源。"""
+    return _rotated_chip_aabb(
+        line.label_x + CHIP_W / 2, line.label_y + CHIP_H, line.angle
+    )
 
 
 def _normalize(
@@ -387,37 +407,37 @@ def _normalize(
     caption: str,
     boxes: dict[int, NodeBox],
     lines: tuple[EdgeLine, ...],
-    arrows: tuple[EdgeLine, ...] = (),
+    ports: tuple[PortMark, ...] = (),
 ) -> ClusterLayout:
     """整体平移 + 定宽高：内容左上角落到 `(PAD, PAD)`，宽高 = 内容范围 + `2*PAD`。
 
     不写死 height 公式 —— 每个簇留多少空白由**内容**决定（实拍里 4 个簇各占
     504px 高，其中大半是空白）。chip 也算进范围，保证它不会被切掉。
-    箭头两翼同样算进来（它们能探出主线 bbox 之外几个像素）。
+    端口圆同样算进来（它们能探出主线 bbox 之外几个像素）。
     """
     xs = min(
         [b.x for b in boxes.values()]
         + [ln.x for ln in lines]
         + [ln.label_x for ln in lines]
-        + [ar.x for ar in arrows]
+        + [p.cx - PORT_D // 2 for p in ports]
     )
     ys = min(
         [b.y for b in boxes.values()]
         + [ln.y for ln in lines]
         + [ln.label_y for ln in lines]
-        + [ar.y for ar in arrows]
+        + [p.cy - PORT_D // 2 for p in ports]
     )
     xe = max(
         [b.x + b.w for b in boxes.values()]
         + [ln.x + ln.w for ln in lines]
         + [ln.label_x + CHIP_W for ln in lines]
-        + [ar.x + ar.w for ar in arrows]
+        + [p.cx + PORT_D // 2 for p in ports]
     )
     ye = max(
         [b.y + b.h for b in boxes.values()]
         + [ln.y + ln.h for ln in lines]
         + [ln.label_y + CHIP_H for ln in lines]
-        + [ar.y + ar.h for ar in arrows]
+        + [p.cy + PORT_D // 2 for p in ports]
     )
     dx, dy = PAD - xs, PAD - ys
     return ClusterLayout(
@@ -427,7 +447,7 @@ def _normalize(
         lines=tuple(_shift_line(ln, dx, dy) for ln in lines),
         width=xe - xs + 2 * PAD,
         height=ye - ys + 2 * PAD,
-        arrows=tuple(replace(ar, x=ar.x + dx, y=ar.y + dy) for ar in arrows),
+        ports=tuple(replace(p, cx=p.cx + dx, cy=p.cy + dy) for p in ports),
     )
 
 
@@ -448,37 +468,48 @@ def _cluster(
         boxes[right] = _box(PAIR_SPAN / 2, 0.0, right)
     else:
         # ≥3 成员 → 扇形：hub 在下、环上节点按张角散在上方（任意两条边不共线）
-        radius = _ring_radius(len(ring))
         boxes[hub] = _box(0.0, 0.0, hub)
         for uid, theta in zip(ring, _fan_angles(len(ring)), strict=True):
             ang = math.radians(theta)
-            boxes[uid] = _box(radius * math.cos(ang), radius * math.sin(ang), uid)
+            boxes[uid] = _box(RING_R * math.cos(ang), RING_R * math.sin(ang), uid)
     known = tuple(boxes.values())
     shifts = _pair_shifts(es, boxes)
     lines: list[EdgeLine] = []
-    arrows: list[EdgeLine] = []
+    ports: list[PortMark] = []
     by_pair: dict[tuple[int, int], list[int]] = {}  # pair → lines 下标（chip 成对处理）
     for e in es:
         if e.src not in boxes or e.dst not in boxes:
             continue
-        line, heads = _draw_edge(
+        line, marks = _draw_edge(
             boxes[e.src], boxes[e.dst], e, shift=shifts.get(e, _NO_SHIFT)
         )
         by_pair.setdefault(e.pair, []).append(len(lines))
         lines.append(line)
-        arrows.extend(heads)
-    for idxs in by_pair.values():
-        # 同对多线：chip 镜到**自己线的外侧**（不镜就会压到另一条线 dst 端的箭头），
-        # 之后再沿公共法线把两个 chip 推开（两线只隔 14px、chip 高 26px，会叠住）。
+        ports.extend(marks)
+    placed: list[tuple[float, float, float, float]] = []
+
+    def _span(ii: list[int]) -> float:
+        return min(math.hypot(lines[i].w, lines[i].h) for i in ii)
+
+    for idxs in sorted(by_pair.values(), key=_span):
+        # 同对多线：两个 chip 各自贴着自己的线，靠**沿线错开**分开 ——
+        # 两条线方向相反，同一个 t_hint 会自然落到线段两端；把**本簇已放好的 chip**
+        # （含别对的）一起传进去，撞上就继续沿线滑（不再沿法线推：那正是「标签离线」）。
+        # 顺序：**短线上先放**（可用位置最少），长线上的后放、有的是地方让开。
         for i in idxs:
-            lines[i] = _labelled(lines[i], known, side=-1.0 if len(idxs) > 1 else 1.0)
-        _deoverlap_pair_chips(lines, idxs)
+            lines[i] = _labelled(
+                lines[i],
+                known,
+                t_hint=0.30 if len(idxs) > 1 else 0.5,
+                taken=tuple(placed),
+            )
+            placed.append(_chip_rect(lines[i]))
     return _normalize(
         hub=hub,
         caption=caption,
         boxes=boxes,
         lines=tuple(lines),
-        arrows=tuple(arrows),
+        ports=tuple(ports),
     )
 
 

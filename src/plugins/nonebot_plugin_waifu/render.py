@@ -1,20 +1,19 @@
-"""结果图渲染（nonebot-plugin-htmlkit，**可选依赖**）。
+"""结果图渲染（**Chromium**：nonebot-plugin-htmlrender，可选依赖）。
 
 ## 三条必须遵守的约定
 
 1. **失败一律回退文本，绝不抛**：渲染是锦上添花，渲染不通不能表现成「命令没反应」。
    `render_card()` 返回 `None` 就由调用方发纯文本。
 2. **所有用户输入必须 `html.escape`**（昵称是用户随手写的）。
-3. **别用浏览器语义写 CSS**：htmlkit 用的是自带渲染器（litehtml），**不是 Chromium**。
-   实测：`dpi` 无效、`max_width` 是**上限而非缩放器**（内容更宽会被压扁）、flex 的 `gap`
-   **不生效**。宽度/字号/间距全部显式写死，间距用 `margin`。
+3. **渲染器是 Chromium**（用户 2026-10-14：从 litehtml/htmlkit **改用 Chromium**）——
+   `transform` / flex / gap 这些浏览器语义**可以用了**：标签沿线条旋转就是靠
+   `transform:rotate()`（litehtml 实测不支持，会静默不转）。
+   ⚠️ 视口宽度靠 `viewport={"width": ...}` 写死，`full_page=True` 截整页。
 
 ## 头像为什么要转 data URI
 
-htmlkit 的 `combined_img_fetcher` 里 `network_img_fetcher` **不带任何自定义请求头**，
-且**失败是静默的**（只记 warning，不抛给调用方）。而 `data_scheme_img_fetcher` 是第一步
-尝试、原生解码 —— 所以头像由插件自己下载好（带 Referer 等头）再转 base64 塞进模板，
-既绕开取图限制，也不依赖宿主装了哪个 HTTP 驱动。
+渲染在 Chromium 里跑，图片本可以直接给 URL；但**头像仍走 data URI**：插件自己下载
+（带 Referer 等头）再转 base64，渲染就不会因为网络抖动而缺图，也不依赖宿主的 HTTP 驱动。
 """
 
 from __future__ import annotations
@@ -33,6 +32,8 @@ if TYPE_CHECKING:
 
     from .layout import ClusterLayout, EdgeLine, NodeBox
     from .relations import RelationGraph
+
+from .layout import CHIP_H, CHIP_W, PORT_D, label_rotation
 
 logger = logging.getLogger("nonebot_plugin_waifu")
 
@@ -196,18 +197,34 @@ def build_html(ctx: CardContext, *, footer: str | None = None) -> str:
     )
 
 
-def _load_htmlkit() -> Any:
-    """惰性取 `html_to_pic`（**单独抽出来**，测试可 monkeypatch，不必真装 htmlkit）。"""
-    from nonebot_plugin_htmlkit import html_to_pic  # pyright: ignore[reportMissingImports]
+def _load_renderer() -> Any:
+    """惰性取渲染器 `html_to_pic`（**Chromium**：`nonebot-plugin-htmlrender`）。
+
+    单独抽出来是为了测试能 monkeypatch，不必真装 playwright + 浏览器。
+    """
+    from nonebot_plugin_htmlrender import html_to_pic  # pyright: ignore[reportMissingImports]
 
     return html_to_pic
+
+
+async def _shot(html: str, *, width: int, height: int = 100) -> bytes:
+    """HTML → PNG：视口宽度写死，高度按整页长（`full_page=True`）。
+
+    `device_scale_factor=1`：与旧 litehtml 的 1:1 像素输出对齐（不把图放大一倍）。
+    """
+    html_to_pic = _load_renderer()
+    return await html_to_pic(
+        html,
+        viewport={"width": width, "height": height},
+        full_page=True,
+        device_scale_factor=1,
+    )
 
 
 async def render_card(ctx: CardContext, *, footer: str | None = None) -> bytes | None:
     """渲染成 PNG。**任何失败都只 warning 并返回 None**（调用方回退纯文本）。"""
     try:
-        html_to_pic = _load_htmlkit()
-        return await html_to_pic(build_html(ctx, footer=footer), max_width=MAX_WIDTH)
+        return await _shot(build_html(ctx, footer=footer), width=MAX_WIDTH)
     except Exception as e:
         logger.warning("老婆卡片渲染失败，回退纯文本: %s: %s", type(e).__name__, e)
         return None
@@ -414,10 +431,7 @@ async def render_notice(
 ) -> bytes | None:
     """渲染回执卡 PNG。**任何失败都只 warning 并返回 None**（调用方回退等价文本）。"""
     try:
-        html_to_pic = _load_htmlkit()
-        return await html_to_pic(
-            build_notice_html(ctx, avatars=avatars), max_width=MAX_WIDTH
-        )
+        return await _shot(build_notice_html(ctx, avatars=avatars), width=MAX_WIDTH)
     except Exception as e:
         logger.warning("回执卡渲染失败，回退纯文本: %s: %s", type(e).__name__, e)
         return None
@@ -460,7 +474,7 @@ _NOTICE_CSS: Final[str] = (
 # ---------------------------------------------------------------------------
 # 关系图：节点 = 头像 + 昵称，边 = `linear-gradient` 硬色带画出的斜线
 #
-# ⚠️ litehtml **没有 `transform`**：斜线不能靠旋转盒子画。用渐变硬色带的那条缝当线
+# 斜线用渐变硬色带画（Chromium 下也能直接 rotate，但色带法能精确控制虚线段数，保留）：
 # （现场探针实测：线上像素数与理论值一致）—— 盒 = 线段的 bbox，色带穿过盒中心，
 # 于是色带**恰好**是这条线段。
 # ---------------------------------------------------------------------------
@@ -476,9 +490,10 @@ _EDGE_COLOR: Final[dict[str, str]] = {
 #: 「连线几乎看不见」（旧值统一 3px 且虚线被切成 5 段，每段只有几个像素）。
 _EDGE_PX: Final[dict[str, int]] = {"marriage": 4, "crush": 3, "like": 3}
 
-#: 虚线切片数：`dashes=2` → 3 切片、**只画首尾两段**，中间那段正好留给关系名 chip
-#: （旧值 5 → 9 切片只画 5 段，段太短看不见）。
-_EDGE_DASHES: Final[dict[str, int]] = {"marriage": 1, "crush": 2, "like": 2}
+#: 虚线切片数：`dashes=2` → 3 切片、只画首尾两段（中间那段原先留给 chip）；
+#: 标签现在**贴在线的旁边**（不再压线），所以虚线改密一点（4 → 7 切片画 4 段），
+#: 免得中间一道大缝看着像断线。旧值 5 → 9 切片只画 5 段，段太短看不见。
+_EDGE_DASHES: Final[dict[str, int]] = {"marriage": 1, "crush": 4, "like": 4}
 
 #: 关系图卡片宽：**比其它卡片宽** —— 2 成员簇要两列并排，而每簇是
 #: `layout.PAIR_SPAN(260) + 节点盒(96) + 两侧 PAD(24*2) = 404px`，两簇 808px；
@@ -495,10 +510,10 @@ _EDGE_LABEL: Final[dict[str, str]] = {
     "like": "喜欢",
 }
 
-#: 图例（图 footer 与纯文本回退**共用同一条**，别写两遍）：三种关系 + 箭头含义。
+#: 图例（图 footer 与纯文本回退**共用同一条**，别写两遍）：三种关系 + 端口圆含义。
 _GRAPH_LEGEND: Final[str] = (
-    "粉色实线=夫妻（双向） · 琥珀虚线=倾心（箭头指向被倾心的人） · "
-    "蓝色虚线=喜欢（箭头指向被喜欢的人）"
+    "粉色实线=夫妻（双向） · 琥珀虚线=倾心 · 蓝色虚线=喜欢 · "
+    "有向边两端：实心圆=发起方，空心圆=被指向的一方"
 )
 
 #: 节点名字最多显示几个字符（超出截断 + `…`）：节点盒只有 96px 宽 ≈ 6 个 16px 汉字，
@@ -528,8 +543,15 @@ _GRAPH_CSS: Final[str] = (
   /* `nowrap`：名字已截到 6 字 + …，再换行就会压到下面的图（单行才好看） */
   .nm { font-size: 16px; color: #0f172a; line-height: 24px; white-space: nowrap; }
   .seg { position: absolute; }
-  .elab { position: absolute; font-size: 14px; padding: 1px 6px;
-          border-radius: 8px; background: #ffffff; }
+  /* 端口圆（有向边两端）：**起点实心、终点空心** —— 用户 2026-10-14 口径。
+     空心靠 border-box + 白底 + 同色描边，与实心圆**外径一致**。 */
+  .port { position: absolute; box-sizing: border-box; border-radius: 50%; }
+  /* 关系名：**沿线条旋转、底边贴在自己的线上**（Chromium 支持 transform；
+     旋转原点在底边中点 = 线上那个锚点）。 */
+  .elab { position: absolute; box-sizing: border-box; font-size: 14px;
+          line-height: 22px; text-align: center; border-radius: 8px;
+          background: #ffffff; white-space: nowrap;
+          transform-origin: 50% 100%; }
 """
 )
 
@@ -551,13 +573,19 @@ _NODE_TEMPLATE: Final[str] = (
     '<div class="nm">{name}</div></div>'
 )
 _LABEL_TEMPLATE: Final[str] = (
-    '<div class="elab" style="left:{x}px;top:{y}px;color:{color};'
-    'border:1px solid {color}">{text}</div>'
+    '<div class="elab" style="left:{x}px;top:{y}px;width:{w}px;height:{h}px;'
+    'color:{color};border:1px solid {color};transform:rotate({deg}deg)">{text}</div>'
 )
+_PORT_TEMPLATE: Final[str] = (
+    '<div class="port" style="left:{x}px;top:{y}px;width:{d}px;height:{d}px;'
+    '{paint}"></div>'
+)
+#: 空心圆描边宽度（px）：外径与实心圆一致（`PORT_D`），靠 border-box 保证。
+PORT_STROKE: Final[int] = 3
 
 
 def _band_background(w: int, h: int, angle: float, color: str, px: int = 3) -> str:
-    """用 `linear-gradient` 的硬色带画出穿过盒中心的斜线段（litehtml 无 transform）。
+    """用 `linear-gradient` 的硬色带画出穿过盒中心的斜线段（不依赖 `transform`）。
 
     渐变轴取**垂直线段**方向（`angle = atan2(dy, dx)` 的度数），色带放在 50%：
     色带与线段平行、且穿过盒中心 —— 而盒就是线段的 bbox，所以色带**恰好**是这条线段。
@@ -657,7 +685,7 @@ def _node_html(
 def _cluster_html(
     cluster: ClusterLayout, *, nicknames: dict[int, str], pool: dict[int, str | None]
 ) -> str:
-    """一个簇的 HTML：线段 + 箭头两翼 + 关系名 chip + 节点（坐标来自 layout）。"""
+    """一个簇的 HTML：线段 + 端口圆 + 沿线条旋转的关系名 + 节点（坐标来自 layout）。"""
     segs: list[str] = []
     for line in cluster.lines:
         color = _EDGE_COLOR.get(line.kind, "#db2777")
@@ -673,20 +701,29 @@ def _cluster_html(
             _LABEL_TEMPLATE.format(
                 x=line.label_x,
                 y=line.label_y,
+                w=CHIP_W,
+                h=CHIP_H,
                 color=color,
+                deg=round(label_rotation(line.angle), 1),
                 text=html_mod.escape(_EDGE_LABEL.get(line.kind, line.kind)),
             )
         )
-    # 箭头两翼**永远实线**（dashes=1）：主线是虚线，方向也要看得清。
-    segs.extend(
-        _segment_html(
-            arrow,
-            _EDGE_COLOR.get(arrow.kind, "#db2777"),
-            dashes=1,
-            px=_EDGE_PX.get(arrow.kind, 3),
+    # 端口圆：**起点实心、终点空心**（方向不再靠箭头，用户 2026-10-14）。
+    for port in cluster.ports:
+        color = _EDGE_COLOR.get(port.kind, "#db2777")
+        paint = (
+            f"background:{color}"
+            if port.filled
+            else f"background:#ffffff;border:{PORT_STROKE}px solid {color}"
         )
-        for arrow in cluster.arrows
-    )
+        segs.append(
+            _PORT_TEMPLATE.format(
+                x=port.cx - PORT_D // 2,
+                y=port.cy - PORT_D // 2,
+                d=PORT_D,
+                paint=paint,
+            )
+        )
     nodes = "".join(
         _node_html(n, nicknames=nicknames, avatars=pool) for n in cluster.nodes
     )
@@ -757,12 +794,11 @@ async def render_graph(
 ) -> bytes | None:
     """渲染关系图 PNG。**任何失败都只 warning 并返回 None**（调用方回退纯文本）。"""
     try:
-        html_to_pic = _load_htmlkit()
-        return await html_to_pic(
+        return await _shot(
             build_graph_html(
                 clusters, nicknames=nicknames, avatars=avatars, focus=focus
             ),
-            max_width=GRAPH_MAX_WIDTH,
+            width=GRAPH_MAX_WIDTH,
         )
     except Exception as e:
         logger.warning("关系图渲染失败，回退纯文本: %s: %s", type(e).__name__, e)

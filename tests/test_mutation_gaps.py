@@ -84,39 +84,41 @@ def _ctx():
     )
 
 
-def test_render_card_returns_none_when_htmlkit_load_raises(monkeypatch):
-    """**M14-1**：`_load_htmlkit()` **同步**抛（htmlkit 没装）→ 返回 None，不抛。
+def test_render_card_returns_none_when_renderer_load_raises(monkeypatch):
+    """**M14-1**：`_load_renderer()` **同步**抛 → 返回 None，不抛。
 
-    `render_card` 里 `html_to_pic = _load_htmlkit()` 是同步调用，所以替身用普通函数。
+    （没装 htmlrender / 浏览器起不来时走这条路。）
+
+    `render_card` 里 `_load_renderer()` 是同步调用，所以替身用普通函数。
     """
     from nonebot_plugin_waifu import render
 
     def boom():
-        raise RuntimeError("htmlkit 未安装")
+        raise RuntimeError("htmlrender 未安装")
 
-    monkeypatch.setattr(render, "_load_htmlkit", boom)
+    monkeypatch.setattr(render, "_load_renderer", boom)
     assert asyncio.run(render.render_card(_ctx())) is None
 
 
 def test_render_card_returns_none_when_render_raises(monkeypatch):
-    """**M14-2**：htmlkit 取到了，但渲染时抛 → 仍然返回 None（不抛）。"""
+    """**M14-2**：渲染器取到了，但渲染时抛 → 仍然返回 None（不抛）。"""
     from nonebot_plugin_waifu import render
 
-    async def boom(_html, *, max_width):
+    async def boom(_html, **_kwargs):
         raise RuntimeError("渲染崩了")
 
-    monkeypatch.setattr(render, "_load_htmlkit", lambda: boom)
+    monkeypatch.setattr(render, "_load_renderer", lambda: boom)
     assert asyncio.run(render.render_card(_ctx())) is None
 
 
 def test_render_card_passes_png_through_on_success(monkeypatch):
-    """**M14-3**：成功路径**原样透传** htmlkit 的返回值（否则成功路径没人管）。"""
+    """**M14-3**：成功路径**原样透传**渲染器的返回值（否则成功路径没人管）。"""
     from nonebot_plugin_waifu import render
 
-    async def fake(_html, *, max_width):
+    async def fake(_html, **_kwargs):
         return b"PNG"
 
-    monkeypatch.setattr(render, "_load_htmlkit", lambda: fake)
+    monkeypatch.setattr(render, "_load_renderer", lambda: fake)
     assert asyncio.run(render.render_card(_ctx())) == b"PNG"
 
 

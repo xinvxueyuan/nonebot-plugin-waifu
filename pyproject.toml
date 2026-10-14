@@ -33,8 +33,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# 结果图渲染（可选）：装不上/加载失败时 render 返回 None，handle 回退纯文本。
-htmlkit = ["nonebot-plugin-htmlkit==0.1.0rc5"]
+# 结果图渲染（可选）：Chromium 出图走 nonebot-plugin-htmlrender（playwright）。
+# 装完还要 `playwright install chromium`；缺依赖 / 浏览器起不来时
+# render 返回 None，handle 回退纯文本。
+render = ["nonebot-plugin-htmlrender==0.6.7"]
 
 [project.urls]
 Homepage = "https://github.com/xinvxueyuan/nonebot-plugin-waifu"

@@ -337,32 +337,49 @@ def test_like_edge_is_blue_dashed_and_does_not_clash_with_crush():
     assert render._EDGE_PX["crush"] == 3 and render._EDGE_DASHES["crush"] > 1
 
 
-def test_arrow_wings_are_drawn_solid_in_the_edge_color(monkeypatch):
-    """虚线主线的 dst 端箭头两翼**必须画实线**（dashes=1）、配色/粗细同主线。"""
+def test_ports_render_as_filled_and_hollow_circles_in_the_edge_color():
+    """端口圆：**起点实心**（同色填充）、**终点空心**（白底 + 同色描边）、外径一致。
+
+    用户 2026-10-14：「不要箭头了，线条两边一个空心圆一个实心圆，作为节点的接口」。
+    """
     from nonebot_plugin_waifu import layout, render
 
     (cluster,) = layout.layout_graph(_manual((1, 2, "crush")), focus=None)
-    calls = []
-    real = render._segment_html
-
-    def spy(line, color, *, dashes=1, px=3):
-        calls.append((line, color, dashes, px))
-        return real(line, color, dashes=dashes, px=px)
-
-    monkeypatch.setattr(render, "_segment_html", spy)
     html = render._cluster_html(cluster, nicknames={}, pool={})
-    arrow_boxes = {(w.x, w.y, w.w, w.h) for w in cluster.arrows}
-    wing_calls = [c for c in calls if (c[0].x, c[0].y, c[0].w, c[0].h) in arrow_boxes]
-    assert len(wing_calls) == 2
-    for _line, color, dashes, px in wing_calls:
-        assert dashes == 1  # 实线：虚线边上的箭头也要看得清
-        assert color == render._EDGE_COLOR["crush"]
-        assert px == render._EDGE_PX["crush"]
-    main_calls = [
-        c for c in calls if (c[0].x, c[0].y, c[0].w, c[0].h) not in arrow_boxes
-    ]
-    assert [c[2] for c in main_calls] == [render._EDGE_DASHES["crush"]]  # 主线仍是虚线
-    assert html.count('class="seg"') == 4  # 虚线 2 段 + 箭头 2 翼
+    color = render._EDGE_COLOR["crush"]
+    assert html.count('class="port"') == 2  # 有向边两端各一个
+    assert f"background:{color}" in html  # 实心
+    assert f"background:#ffffff;border:{render.PORT_STROKE}px solid {color}" in html
+    # 外径一致（border-box 才做得到），且不含任何箭头痕迹
+    assert html.count(f"width:{layout.PORT_D}px;height:{layout.PORT_D}px") == 2
+    assert 'class="seg"' in html  # 主线还在
+
+
+def test_ports_absent_on_undirected_marriage_edges():
+    """夫妻（无向）没有端口圆 —— 方向标记只属于有向边。"""
+    from nonebot_plugin_waifu import layout, render
+
+    (cluster,) = layout.layout_graph(_manual((1, 2, "marriage")), focus=None)
+    html = render._cluster_html(cluster, nicknames={}, pool={})
+    assert 'class="port"' not in html
+
+
+def test_label_is_rotated_along_its_line_in_the_html():
+    """标签**真的转了**：`transform:rotate(θdeg)`，且绕**底边中点**转。
+
+    θ 与 `layout.label_rotation` 同源。
+
+    litehtml 实测不支持 `transform`（静默不转），换 Chromium 正是为了这条 —— 回归钉住。
+    """
+    from nonebot_plugin_waifu import layout, render
+
+    (cluster,) = layout.layout_graph(_manual((1, 2, "crush")), focus=None)
+    (line,) = cluster.lines
+    html = render._cluster_html(cluster, nicknames={}, pool={})
+    deg = round(layout.label_rotation(line.angle), 1)
+    assert f"transform:rotate({deg}deg)" in html
+    # 旋转原点是底边中点 = 线上那个锚点
+    assert "transform-origin: 50% 100%" in render._GRAPH_CSS
 
 
 def test_graph_footer_and_text_fallback_share_the_new_legend():
@@ -370,8 +387,8 @@ def test_graph_footer_and_text_fallback_share_the_new_legend():
     from nonebot_plugin_waifu import layout, render
 
     legend = (
-        "粉色实线=夫妻（双向） · 琥珀虚线=倾心（箭头指向被倾心的人） · "
-        "蓝色虚线=喜欢（箭头指向被喜欢的人）"
+        "粉色实线=夫妻（双向） · 琥珀虚线=倾心 · 蓝色虚线=喜欢 · "
+        "有向边两端：实心圆=发起方，空心圆=被指向的一方"
     )
     g = _manual((1, 2, "marriage"), (3, 4, "crush"), (5, 6, "like"))
     html = render.build_graph_html(

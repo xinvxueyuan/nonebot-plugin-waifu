@@ -340,35 +340,59 @@ MUTATIONS = [
         '            "   partner_id = partner_id,',
     ),
     (
-        "MN16 箭头只给倾心不给喜欢（like 边退回没有方向）",
+        "MN16 有向边标记只给倾心不给喜欢（like 边退回没有方向）",
         RELATIONS,
         "        return self.kind in (KIND_CRUSH, KIND_LIKE)",
         "        return self.kind == KIND_CRUSH",
     ),
     (
-        "MN17 夫妻也画箭头（无向边不该有 dst 端箭头）",
+        "MN17 夫妻也画端口圆（无向边不该有端口）",
         LAYOUT,
         "    if not edge.directed:\n        return line, ()",
-        "    if False:  # 变异：夫妻（无向）也画箭头\n        return line, ()",
+        "    if False:  # 变异：夫妻（无向）也画端口圆\n        return line, ()",
     ),
     (
-        "MN18 箭头翼长退化成 0（箭头看不见）",
+        "MN18 端口圆不区分实心/空心（方向读不出来）",
         LAYOUT,
-        "ARROW_WING_LEN: Final[float] = 11.0  # 箭头翼长（px）",
-        "ARROW_WING_LEN: Final[float] = 0.0  # 箭头翼长（px）",
+        "        PortMark(edge.kind, edge.src, edge.dst, round(dst_x), round(dst_y),"
+        " False),",
+        "        PortMark(edge.kind, edge.src, edge.dst, round(dst_x), round(dst_y),"
+        " True),",
     ),
     (
-        "MN19 箭头翼角退化成 0（两翼贴着主线，看不出方向）",
+        "MN19 标签离线（沿法线硬推 31px = 回到用户报的「连线都对不齐」）",
         LAYOUT,
-        "ARROW_WING_DEG: Final[float] = 155.0  # 翼与主线（前进方向）的夹角（度）",
-        "ARROW_WING_DEG: Final[float] = 0.0  # 翼与主线（前进方向）的夹角（度）",
+        "        ax, ay = mx + (t - 0.5) * dx, my + (t - 0.5) * dy",
+        "        _nl = math.hypot(dx, dy) or 1.0\n"
+        "        ax, ay = (\n"
+        "            mx + (t - 0.5) * dx - dy / _nl * 31.0,\n"
+        "            my + (t - 0.5) * dy + dx / _nl * 31.0,\n"
+        "        )",
+    ),
+    (
+        "MN25 端口圆画到线段中点（不在线的两端）",
+        LAYOUT,
+        "    return line, _port_marks(edge, x0, y0, x1, y1)",
+        "    return line, _port_marks(edge, (x0 + x1) / 2, (y0 + y1) / 2, x1, y1)",
+    ),
+    (
+        "MN26 chip 不避让节点盒（标签压到头像/名字上）",
+        LAYOUT,
+        "    blocked = [(b.x, b.y, b.x + b.w, b.y + b.h) for b in boxes]",
+        "    blocked = []  # 变异：不再避让节点盒",
+    ),
+    (
+        "MN27 标签不旋转（文本不跟随线条）",
+        RENDER,
+        "transform:rotate({deg}deg)",
+        "transform:none",
     ),
     (
         "MN20 图例丢掉「喜欢」一行（图上多一种线却不说是什么）",
         RENDER,
-        '    "粉色实线=夫妻（双向） · 琥珀虚线=倾心（箭头指向被倾心的人） · "\n'
-        '    "蓝色虚线=喜欢（箭头指向被喜欢的人）"',
-        '    "粉色实线=夫妻（双向） · 琥珀虚线=倾心（箭头指向被倾心的人）"',
+        '    "粉色实线=夫妻（双向） · 琥珀虚线=倾心 · 蓝色虚线=喜欢 · "\n'
+        '    "有向边两端：实心圆=发起方，空心圆=被指向的一方"',
+        '    "粉色实线=夫妻（双向） · 琥珀虚线=倾心 · "',
     ),
     (
         "MN21 关系名标签回到「倾心→」字符（方向又只靠文字）",
@@ -431,7 +455,9 @@ def main() -> int:
 
     results = []
     for label, path, old, new in MUTATIONS:
-        orig = path.read_bytes().decode("utf-8")
+        # ⚠️ 必须用 read_text：工作树是 CRLF（git autocrlf=true），而锚点里的换行
+        # 写的是 \n —— 字节级比对会一条都命中不了。
+        orig = path.read_text(encoding="utf-8")
         cnt = orig.count(old)
         if cnt != 1:
             print(f"  ⚠ {label}: 锚点命中 {cnt} 次 —— 跳过（锚点要能唯一定位）")
