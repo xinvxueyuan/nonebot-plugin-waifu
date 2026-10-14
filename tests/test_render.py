@@ -411,3 +411,25 @@ def test_like_edge_renders_its_own_color_and_label():
     html = render.build_graph_html(clusters, nicknames={}, avatars={})
     assert "喜欢" in html and "#0ea5e9" in html
     assert "#f59e0b" in html and "#db2777" in html
+
+
+def test_status_badge_and_avatars_are_vertically_centered():
+    """胶囊/头像与同行文字**垂直居中**（用户 2026-10-14：「状态胶囊没有对齐文字」）。
+
+    实测（Chromium 布局引擎）：inline span 按基线对齐 → 胶囊中心比标题文字中心低
+    **4.5px**；行内小人头偏 1.5px；抽取卡的头像行偏 **9px**。改成 flex +
+    `align-items: center` 后三处偏量都是 **0.0px**。
+    """
+    from nonebot_plugin_waifu import render
+
+    assert (
+        ".title { display: flex; align-items: center; gap: 10px; }"
+        in render._NOTICE_CSS
+    )
+    assert (
+        ".item { display: flex; align-items: center; margin-top: 8px; }"
+        in render._NOTICE_CSS
+    )
+    assert ".body { display: flex; align-items: center; }" in render._CSS
+    # 胶囊自己撑高度（line-height:1 + 上下 5px），别再靠 margin 挤位置
+    assert "margin-left: 10px" not in render._NOTICE_CSS

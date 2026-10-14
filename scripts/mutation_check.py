@@ -382,6 +382,24 @@ MUTATIONS = [
         "    blocked = []  # 变异：不再避让节点盒",
     ),
     (
+        "MN28 状态胶囊回到基线对齐（标题行不再是 flex，胶囊又比文字低 4.5px）",
+        RENDER,
+        "  .title { display: flex; align-items: center; gap: 10px; }",
+        "  .title { display: block; }",
+    ),
+    (
+        "MN29 名单行小人头回到基线对齐（不再与文字垂直居中）",
+        RENDER,
+        "  .item { display: flex; align-items: center; margin-top: 8px; }",
+        "  .item { display: block; margin-top: 8px; }",
+    ),
+    (
+        "MN30 抽取卡头像行回到基线对齐（昵称掉到头像下缘，偏 9px）",
+        RENDER,
+        "  .body { display: flex; align-items: center; }",
+        "  .body { display: block; }",
+    ),
+    (
         "MN27 标签不旋转（文本不跟随线条）",
         RENDER,
         "transform:rotate({deg}deg)",

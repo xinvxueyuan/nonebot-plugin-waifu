@@ -93,7 +93,9 @@ _BASE_CSS: Final[str] = f"""
 _CSS: Final[str] = (
     _BASE_CSS
     + """
-  .body { display: block; }
+  /* 头像与右侧「昵称」行**垂直居中**：inline 的 img 默认按基线对齐，
+     文字会掉到头像下缘（实测偏 9px）。 */
+  .body { display: flex; align-items: center; }
   .avatar {
     width: 120px; height: 120px; border-radius: 60px;
     border: 3px solid #fbcfe8; margin-right: 22px;
@@ -452,8 +454,11 @@ async def fetch_avatars(ids: Sequence[int], *, limit: int = 4) -> dict[int, str 
 _NOTICE_CSS: Final[str] = (
     _BASE_CSS
     + """
-  .title .badge { font-size: 15px; color: #ffffff; background: {color};
-                  border-radius: 10px; padding: 2px 10px; margin-left: 10px; }
+  /* 状态胶囊：**与标题文字垂直居中**。inline span 默认按基线对齐，实测胶囊中心
+     比标题文字中心低 4.5px；标题行改 flex + `align-items:center` 后偏移为 0。 */
+  .title { display: flex; align-items: center; gap: 10px; }
+  .title .badge { font-size: 15px; line-height: 1; color: #ffffff;
+                  background: {color}; border-radius: 10px; padding: 5px 10px; }
   .head { font-size: 21px; color: #0f172a; line-height: 30px; margin-bottom: 10px; }
   .avatar { width: 96px; height: 96px; border-radius: 48px; border: 3px solid #fbcfe8;
             margin-bottom: 10px; }
@@ -461,7 +466,8 @@ _NOTICE_CSS: Final[str] = (
         background: #fce7f3; color: #9d174d; font-size: 40px; text-align: center;
         line-height: 96px; margin-bottom: 10px; }
   .rows { display: block; }
-  .item { margin-top: 8px; }
+  /* 名单行：小人头 + 文字同样居中（否则小人头骑在文字基线上，偏 1.5px）。 */
+  .item { display: flex; align-items: center; margin-top: 8px; }
   .mini { width: 36px; height: 36px; border-radius: 18px; border: 2px solid #fbcfe8;
           margin-right: 8px; }
   .ph-mini { display: inline-block; width: 36px; height: 36px; border-radius: 18px;
