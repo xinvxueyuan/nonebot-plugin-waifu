@@ -1,3 +1,4 @@
+# ruff: noqa: T201  —— 这是命令行脚本：print 就是它的输出方式（不是漏删的调试语句）
 """变异检验：把每处修复**故意改坏**，确认对应测试真的变红。
 
 没红过的断言只是装饰 —— 它可能断言了恒真条件、或读错了属性名，
@@ -21,6 +22,7 @@ RENDER = ROOT / "src/plugins/nonebot_plugin_waifu/render.py"
 STORE = ROOT / "src/plugins/nonebot_plugin_waifu/store.py"
 RELATIONS = ROOT / "src/plugins/nonebot_plugin_waifu/relations.py"
 NOTICES = ROOT / "src/plugins/nonebot_plugin_waifu/notices.py"
+LAYOUT = ROOT / "src/plugins/nonebot_plugin_waifu/layout.py"
 
 # ⚠️ 不要加 `--no-cov`（本仓未装 pytest-cov，会报 unrecognized arguments）
 TESTS = ["tests/", "-q", "-p", "no:cacheprovider", "-x"]
@@ -55,6 +57,8 @@ def run() -> bool:
     return r.returncode == 0
 
 
+# ⚠️ 锚点一律用 `str.count` 自查唯一（含多行锚点）：命中 0/2 次都会被判「跳过」，
+# 而跳过会计进分母 → 退出码 1，看着像「测试漏网」，其实只是锚点写歪了。
 MUTATIONS = [
     (
         "M1 catch-all 改成 block=True（会饿死别的插件）",
@@ -83,42 +87,51 @@ MUTATIONS = [
     (
         "M7 性别未知改成不通过（会让隐藏性别的人静默抽不到）",
         RULES,
-        '    if me == "unknown" or cand == "unknown":\n        return True  # 任一方性别隐藏 → 判为通过',
+        '    if me == "unknown" or cand == "unknown":\n'
+        "        return True  # 任一方性别隐藏 → 判为通过",
         '    if me == "unknown" or cand == "unknown":\n        return False',
     ),
     (
         "M8 「正常」档退化成不筛（取向失效）",
         RULES,
-        '    if mode not in {"normal", "reverse"}:\n        return True  # all / 未知取值：不过滤',
-        '    return True\n    if mode not in {"normal", "reverse"}:\n        return True',
+        '    if mode not in {"normal", "reverse"}:\n'
+        "        return True  # all / 未知取值：不过滤",
+        "    return True\n"
+        '    if mode not in {"normal", "reverse"}:\n'
+        "        return True",
     ),
     (
         "M9 「今日老婆」已有记录时改成重新抽（违反只展示口径）",
         HANDLE,
-        '    if existing is not None:\n        return Action(action="show", row=existing)',
-        '    if existing is not None:\n        return Action(action="draw", row=existing)',
+        "    if existing is not None:\n"
+        '        return Action(action="show", row=existing)',
+        "    if existing is not None:\n"
+        '        return Action(action="draw", row=existing)',
     ),
     (
         "M10 娶老婆不做双向确认（单方即可绑定）",
         HANDLE,
-        '        reverse = store.get_pending(\n'
+        "        reverse = store.get_pending(\n"
         '            group_id, requester=t, partner=requester, kind="marry"\n'
-        '        )\n'
-        '        if reverse is not None:\n'
+        "        )\n"
+        "        if reverse is not None:\n"
         '            ts = float(reverse["requested_at"])\n'
-        '            if rules.pending_alive(requested_at=ts, now=now):',
-        '        reverse = store.get_pending(\n'
+        "            if rules.pending_alive(requested_at=ts, now=now):",
+        "        reverse = store.get_pending(\n"
         '            group_id, requester=t, partner=requester, kind="marry"\n'
-        '        )\n'
-        '        if True:\n'
-        '            ts = 0.0\n'
-        '            if True:',
+        "        )\n"
+        "        if True:\n"
+        "            ts = 0.0\n"
+        "            if True:",
     ),
     (
         "M12 「确认老婆」顺手把对方也锁了（用户明确不要）",
         HANDLE,
         "    if not store.lock_daily(gid, me, today):",
-        '    store.lock_daily(gid, int((store.get_daily(gid, me, today) or {"partner_id": 0})["partner_id"]), today)\n    if not store.lock_daily(gid, me, today):',
+        "    store.lock_daily("
+        "gid, int((store.get_daily(gid, me, today) or {"
+        '"partner_id": 0})["partner_id"]), today)\n'
+        "    if not store.lock_daily(gid, me, today):",
     ),
     (
         "M13 昵称不转义（XSS/版面破坏）",
@@ -129,14 +142,19 @@ MUTATIONS = [
     (
         "M14 渲染失败改成抛出（会表现成命令无反应）",
         RENDER,
-        '        logger.warning("老婆卡片渲染失败，回退纯文本: %s: %s", type(e).__name__, e)\n        return None',
+        "        logger.warning("
+        '"老婆卡片渲染失败，回退纯文本: %s: %s", type(e).__name__, e)\n'
+        "        return None",
         "        raise",
     ),
     (
         "M15 文案模板写错时改成抛出（命令会变成「没反应」）",
         HANDLE,
         "    except (KeyError, IndexError, ValueError) as e:\n        logger.warning(",
-        "    except (KeyError, IndexError, ValueError):\n        raise\n    if False:\n        logger.warning(",
+        "    except (KeyError, IndexError, ValueError):\n"
+        "        raise\n"
+        "    if False:\n"
+        "        logger.warning(",
     ),
     (
         "M16 把「@」加回结果消息（用户已要求关闭全部 @）",
@@ -146,12 +164,15 @@ MUTATIONS = [
         "            group_id=event.group_id,\n"
         "            message=Message(MessageSegment.image(png)),",
         "            group_id=event.group_id,\n"
-        "            message=MessageSegment.at(event.user_id) + MessageSegment.image(png),",
+        "            message=MessageSegment.at(event.user_id)"
+        " + MessageSegment.image(png),",
     ),
     (
         "M17 头像失败改成写负缓存（一次抖动永久缺图）",
         RENDER,
-        '        logger.warning("取头像失败 user=%s: %s: %s", user_id, type(e).__name__, e)\n        return None',
+        "        logger.warning("
+        '"取头像失败 user=%s: %s: %s", user_id, type(e).__name__, e)\n'
+        "        return None",
         '        _AVATAR_CACHE[key] = ""\n        return None',
     ),
     (
@@ -174,8 +195,10 @@ MUTATIONS = [
     (
         "M21 娶老婆忽略上限配置（能无限娶）",
         HANDLE,
-        "    if max_partners > 0:\n        current = store.count_partners(group_id, requester)",
-        "    if False:  # 变异：彻底跳过上限判定\n        current = store.count_partners(group_id, requester)",
+        "    if max_partners > 0:\n"
+        "        current = store.count_partners(group_id, requester)",
+        "    if False:  # 变异：彻底跳过上限判定\n"
+        "        current = store.count_partners(group_id, requester)",
     ),
     (
         "M22 娶老婆不挡机器人（能娶官方机器人）",
@@ -185,12 +208,13 @@ MUTATIONS = [
         "            t\n"
         "            for t, hit in zip(\n"
         "                targets,\n"
-        "                await asyncio.gather(*(robot_filter.is_robot(bot, t) for t in targets)),\n"
+        "                await asyncio.gather("
+        "*(robot_filter.is_robot(bot, t) for t in targets)),\n"
         "                strict=False,\n"
         "            )\n"
         "            if hit\n"
         "        ),",
-        "        max_partners=plugin_config.waifu_max_partners,\\n"
+        "        max_partners=plugin_config.waifu_max_partners,\\\n"
         "        robot_qqs=frozenset(),",
     ),
     (
@@ -246,7 +270,8 @@ MUTATIONS = [
         "        | store.drawn_partners(gid, me, today),",
         "        excluded=store.locked_partners(gid, me, today)\n"
         "        | store.drawn_partners(gid, me, today)\n"
-        "        | {int(uid) for pair in store.list_marriages(gid) for uid in pair[:2]},",
+        "        | {int(uid) for pair in store.list_marriages(gid)"
+        " for uid in pair[:2]},",
     ),
     (
         "MN9 渲染不可用时不回退文本（命令会变成「没反应」）",
@@ -263,14 +288,136 @@ MUTATIONS = [
         "                MessageSegment.text(render.build_notice_fallback_text(ctx)),\n"
         "            ]),\n"
         "        )",
-        "    else:\n"
-        "        return  # 变异：渲染不可用时不回退文本（命令没反应）",
+        "    else:\n        return  # 变异：渲染不可用时不回退文本（命令没反应）",
     ),
     (
         "MN10 回执卡丢掉字段行（图里没有关联信息）",
         RENDER,
         '  <div class="rows">{rows}</div>\n',
         "  \n",
+    ),
+    # ------------------------------------------------------------------ #
+    # 2026-10-14（三）：新增「喜欢」关系 / 有向边真箭头 / 单人即时离婚
+    # ------------------------------------------------------------------ #
+    (
+        "MN11 喜欢边无视「夫妻优先」（同一对既画夫妻又画喜欢 = 重边）",
+        RELATIONS,
+        "        if x == y or (min(x, y), max(x, y)) in seen or (x, y) in crush_dirs:",
+        "        if x == y or (x, y) in crush_dirs:",
+    ),
+    (
+        "MN12 喜欢边无视「倾心优先」（同方向既画倾心又画喜欢 = 重边）",
+        RELATIONS,
+        "        if x == y or (min(x, y), max(x, y)) in seen or (x, y) in crush_dirs:",
+        "        if x == y or (min(x, y), max(x, y)) in seen:",
+    ),
+    (
+        "MN13 喜欢边方向取反（src/dst 互换：箭头指向抽取者自己）",
+        RELATIONS,
+        "        edges.append(RelationEdge(x, y, KIND_LIKE))",
+        "        edges.append(RelationEdge(y, x, KIND_LIKE))",
+    ),
+    (
+        "MN14 喜欢取成最早一次抽取（换一只后仍指向第一只）",
+        STORE,
+        '" WHERE group_id = ? ORDER BY date_key DESC, updated_at DESC"',
+        '" WHERE group_id = ? ORDER BY date_key ASC, updated_at ASC"',
+    ),
+    (
+        "MN15 换一只不覆盖旧记录（喜欢停在今天第一次抽到的人）",
+        STORE,
+        '            f"INSERT INTO {_T_DAILY}"\n'
+        '            " (group_id, user_id, date_key, partner_id,'
+        ' locked, draws_used, updated_at)"\n'
+        '            " VALUES (?, ?, ?, ?, 0, 1, ?)"\n'
+        '            " ON CONFLICT (group_id, user_id, date_key) DO UPDATE SET"\n'
+        '            "   partner_id = excluded.partner_id,',
+        '            f"INSERT INTO {_T_DAILY}"\n'
+        '            " (group_id, user_id, date_key, partner_id,'
+        ' locked, draws_used, updated_at)"\n'
+        '            " VALUES (?, ?, ?, ?, 0, 1, ?)"\n'
+        '            " ON CONFLICT (group_id, user_id, date_key) DO UPDATE SET"\n'
+        '            "   partner_id = partner_id,',
+    ),
+    (
+        "MN16 箭头只给倾心不给喜欢（like 边退回没有方向）",
+        RELATIONS,
+        "        return self.kind in (KIND_CRUSH, KIND_LIKE)",
+        "        return self.kind == KIND_CRUSH",
+    ),
+    (
+        "MN17 夫妻也画箭头（无向边不该有 dst 端箭头）",
+        LAYOUT,
+        "    if not edge.directed:\n        return line, ()",
+        "    if False:  # 变异：夫妻（无向）也画箭头\n        return line, ()",
+    ),
+    (
+        "MN18 箭头翼长退化成 0（箭头看不见）",
+        LAYOUT,
+        "ARROW_WING_LEN: Final[float] = 11.0  # 箭头翼长（px）",
+        "ARROW_WING_LEN: Final[float] = 0.0  # 箭头翼长（px）",
+    ),
+    (
+        "MN19 箭头翼角退化成 0（两翼贴着主线，看不出方向）",
+        LAYOUT,
+        "ARROW_WING_DEG: Final[float] = 155.0  # 翼与主线（前进方向）的夹角（度）",
+        "ARROW_WING_DEG: Final[float] = 0.0  # 翼与主线（前进方向）的夹角（度）",
+    ),
+    (
+        "MN20 图例丢掉「喜欢」一行（图上多一种线却不说是什么）",
+        RENDER,
+        '    "粉色实线=夫妻（双向） · 琥珀虚线=倾心（箭头指向被倾心的人） · "\n'
+        '    "蓝色虚线=喜欢（箭头指向被喜欢的人）"',
+        '    "粉色实线=夫妻（双向） · 琥珀虚线=倾心（箭头指向被倾心的人）"',
+    ),
+    (
+        "MN21 关系名标签回到「倾心→」字符（方向又只靠文字）",
+        RENDER,
+        '    "crush": "倾心",',
+        '    "crush": "倾心→",',
+    ),
+    (
+        "MN22 离婚后又悄悄写回 pending（回到双向确认）",
+        HANDLE,
+        "    store.divorce(group_id=group_id, a=requester, b=partner)",
+        "    store.divorce(group_id=group_id, a=requester, b=partner)\n"
+        "    store.set_pending(\n"
+        "        group_id=group_id,\n"
+        "        requester=requester,\n"
+        "        partner=partner,\n"
+        '        kind="divorce",\n'
+        "        requested_at=0.0,\n"
+        "    )",
+    ),
+    (
+        "MN23 离婚改回「等对方确认」（不即时生效）",
+        HANDLE,
+        "    store.divorce(group_id=group_id, a=requester, b=partner)\n"
+        "    return MarriageOutcome(\n"
+        "        bound=False,\n"
+        "        partner=partner,\n"
+        '        message="已离婚",\n'
+        '        lines=((partner, "已离婚"),),\n'
+        "    )",
+        "    store.set_pending(\n"
+        "        group_id=group_id,\n"
+        "        requester=requester,\n"
+        "        partner=partner,\n"
+        '        kind="divorce",\n'
+        "        requested_at=0.0,\n"
+        "    )\n"
+        "    return MarriageOutcome(\n"
+        "        bound=False,\n"
+        "        partner=partner,\n"
+        '        message="已申请离婚，等待对方确认",\n'
+        '        lines=((partner, "已申请离婚"),),\n'
+        "    )",
+    ),
+    (
+        "MN24 关系图接线漏传 likes（抽到的「喜欢」边全丢）",
+        HANDLE,
+        "        likes=store.latest_drawn_partners(gid),",
+        "        likes={},",
     ),
 ]
 
