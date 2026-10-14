@@ -32,11 +32,13 @@ from typing import TYPE_CHECKING, Final, Literal
 from nonebot import on_command
 from nonebot.adapters.onebot.v11 import (
     Bot,
+    Event,
     GroupMessageEvent,
     Message,
     MessageSegment,
 )
 from nonebot.params import CommandArg
+from nonebot.permission import Permission
 
 from . import (
     layout,
@@ -61,6 +63,9 @@ CMD_CONFIRM: Final[str] = "确认老婆"
 CMD_MARRY: Final[str] = "娶老婆"
 CMD_DIVORCE: Final[str] = "离婚"
 
+#: 「指婚」命令词（**固定**，不做配置项）：仅超级管理员可用，见 `WIFE_SUPERUSERS`。
+CMD_ARRANGE: Final[str] = "指婚"
+
 #: 「换老婆」命令词 —— **配置可变**（用户 2026-10-10：换一只是其可变配置，用于生产）。
 #: 源码默认「换老婆」；生产 `.env.dev` 写 `WAIFU_CHANGE_CMD=换一只` 即切换。
 CMD_CHANGE: Final[str] = plugin_config.waifu_change_cmd
@@ -76,6 +81,7 @@ CMD_NAMES: Final[tuple[str, ...]] = (
     CMD_CONFIRM,
     CMD_MARRY,
     CMD_DIVORCE,
+    CMD_ARRANGE,
     CMD_GRAPH,
 )
 
@@ -646,6 +652,49 @@ def apply_marry(
     )
 
 
+def wife_superuser_ids() -> frozenset[int]:
+    """「指婚」白名单 QQ 号 —— **每次现读配置**（改 `.env` 重启即生效）。"""
+    return rules.parse_superusers(plugin_config.wife_superusers)
+
+
+async def _is_wife_superuser(event: Event) -> bool:
+    """「指婚」的 Permission 检查：只看 `WIFE_SUPERUSERS`。
+
+    非白名单用户在**响应器层**就被拦掉 —— 连用法回执都收不到，不暴露这个功能。
+    """
+    return int(getattr(event, "user_id", 0) or 0) in wife_superuser_ids()
+
+
+def apply_arrange(*, group_id: int, head: int, partners: list[int]) -> MarriageOutcome:
+    """「指婚 @a @b @c」（**超级管理员专用**）：**字面绕过双方**直接绑定。
+
+    语义（用户 2026-10-14 原话：「字面意思绕过双方使得 a 娶 b 和 c（视为 a 发起，
+    b、c 同意）」）—— 所以这里**不查任何守卫**：
+
+    - 不问对方同不同意（没有 pending、不等确认窗口）；
+    - 不看 `WAIFU_MAX_PARTNERS`（否则单配的生产配置下「a 娶 b 和 c」根本做不到）；
+    - 不挡机器人、对方已婚也照样绑。
+
+    `head` = 第一个 @ 的人（发起方），`partners` = 其余人（去重保序、剔自己）。
+    """
+    targets = [t for t in dict.fromkeys(partners) if t != head]
+    if not targets:
+        return MarriageOutcome(
+            error="指婚至少要 @ 两个人（第一位是发起人，后面是要指给他的人）",
+        )
+    for t in targets:
+        # 旧的求婚请求作废：指婚直接就是「已绑定」，留着 pending 会让 ta 之后
+        # 发「娶老婆 @我」时又走确认分支（与「已绑定」自相矛盾）。
+        store.clear_pending(group_id, requester=head, partner=t, kind="marry")
+        store.marry(group_id=group_id, a=head, b=t)
+    return MarriageOutcome(
+        bound=True,
+        partners=tuple(targets),
+        message="已指婚",
+        lines=tuple((t, "已绑定（视为对方同意）") for t in targets),
+    )
+
+
 def apply_divorce(*, group_id: int, requester: int, partner: int) -> MarriageOutcome:
     """处理一次「离婚 @partner」：**单人即时生效**（用户 2026-10-14：无需对方同意）。
 
@@ -694,6 +743,15 @@ marry_cmd = on_command(
 )
 # 「离婚」：**单人即时生效** —— 发一句即解除，无需对方同意（用户 2026-10-14）。
 divorce_cmd = on_command(CMD_DIVORCE, aliases={"/离婚"}, priority=PRIORITY, block=True)
+# 「指婚」：**仅 `WIFE_SUPERUSERS` 白名单**（用户 2026-10-14）—— 字面绕过双方
+# 直接绑定。权限在响应器层拦：非白名单用户当没这条命令。
+arrange_cmd = on_command(
+    CMD_ARRANGE,
+    aliases={"/指婚"},
+    priority=PRIORITY,
+    block=True,
+    permission=Permission(_is_wife_superuser),
+)
 graph_cmd = on_command(
     CMD_GRAPH,
     # 斜杠别名按配置词拼（别写死字面量）
@@ -823,6 +881,42 @@ async def _h_marry(
     )
 
 
+@arrange_cmd.handle()
+async def _h_arrange(
+    bot: Bot, event: GroupMessageEvent, args: Message = CommandArg()
+) -> None:
+    """「指婚 @a @b @c」：第一位是发起人，其余人**直接**与 ta 绑定。
+
+    字面绕过双方（见 `apply_arrange`）：不需要 b、c 回发确认、不看上限。
+    无参 / 只 @ 一个人 → 用法回执（外人连这条命令都摸不到，见 `Permission`）。
+    """
+    targets = _resolve_target(event, args)
+    if len(targets) < 2:
+        await _send_notice(
+            bot,
+            event,
+            notices.usage_notice(
+                cmd=CMD_ARRANGE,
+                lines=(
+                    "指婚 @a @b @c",
+                    "第一位是发起人，其余人直接与 ta 绑定（无需确认、不看上限）",
+                ),
+            ),
+        )
+        return
+    out = apply_arrange(group_id=event.group_id, head=targets[0], partners=targets[1:])
+    await _send_notice(
+        bot,
+        event,
+        notices.arrange_notice(
+            head_name=_display_name(event.group_id, targets[0]),
+            head_id=targets[0],
+            results=out.lines,
+            failed=out.error,
+        ),
+    )
+
+
 @divorce_cmd.handle()
 async def _h_divorce(
     bot: Bot, event: GroupMessageEvent, args: Message = CommandArg()
@@ -914,6 +1008,7 @@ async def _h_graph(
 
 
 __all__ = [
+    "CMD_ARRANGE",
     "CMD_CHANGE",
     "CMD_CONFIRM",
     "CMD_DIVORCE",
@@ -923,8 +1018,10 @@ __all__ = [
     "CMD_TODAY",
     "Action",
     "MarriageOutcome",
+    "apply_arrange",
     "apply_divorce",
     "apply_marry",
+    "arrange_cmd",
     "change_cmd",
     "confirm_cmd",
     "divorce_cmd",

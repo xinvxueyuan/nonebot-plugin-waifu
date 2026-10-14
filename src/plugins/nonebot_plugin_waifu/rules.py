@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import re
 import time
 from typing import TYPE_CHECKING, Any, Final
 
@@ -24,6 +25,17 @@ QUOTA_MESSAGE: Final[str] = "渣男，你今天没有老婆了！"
 #: 当天群里的人都被我抽过一遍（去重把人都排除了）时的文案。
 #: 与「池子本来就没人」区分开 —— 后者由 `notices.empty_pool_notice()` 编译。
 ALL_DRAWN_MESSAGE: Final[str] = "今天群里的人你已经抽遍了，明天再来"
+
+
+def parse_superusers(raw: str) -> frozenset[int]:
+    """从 `WIFE_SUPERUSERS` 的原始字符串里取出全部 QQ 号（**纯函数**）。
+
+    容忍多种写法：`1330509996`、`1330509996,2846018938`、`["1330509996"]`
+    —— 一律按「连续数字」切分。写错格式**不会**让插件起不来，只是白名单里
+    少了人（指婚对非白名单用户静默）。
+    """
+    return frozenset(int(t) for t in re.findall(r"\d+", raw))
+
 
 DEFAULT_TZ: Final[str] = "Asia/Shanghai"
 

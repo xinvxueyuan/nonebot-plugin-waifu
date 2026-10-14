@@ -28,7 +28,7 @@ def test_watch_matcher_is_non_blocking():
 
 
 def test_every_command_has_nonempty_cmd_name():
-    """六个命令词都在；「换老婆」「老婆关系图」**来自配置**（默认值见 config）。"""
+    """七个命令词都在；「换老婆」「老婆关系图」**来自配置**（默认值见 config）。"""
     from nonebot_plugin_waifu import handle
     from nonebot_plugin_waifu.config import DEFAULT_CHANGE_CMD, DEFAULT_GRAPH_CMD
 
@@ -41,6 +41,7 @@ def test_every_command_has_nonempty_cmd_name():
         "娶老婆",
         "离婚",
         DEFAULT_GRAPH_CMD,
+        "指婚",
     }
 
 

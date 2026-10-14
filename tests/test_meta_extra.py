@@ -25,7 +25,7 @@ def test_plugin_meta_has_menu_type():
 
 
 def test_plugin_meta_commands_complete():
-    """六条命令齐全、顺序稳定、每条都有非空 desc，且与真实注册命令一致。"""
+    """七条命令齐全、顺序稳定、每条都有非空 desc，且与真实注册命令一致。"""
     extra = pkg.__plugin_meta__.extra
     commands = extra["commands"]
 
@@ -38,6 +38,7 @@ def test_plugin_meta_commands_complete():
         "娶老婆",
         "离婚",
         plugin_config.waifu_graph_cmd,
+        "指婚",
     ]
     # 与 handle 里真正注册的命令词一一对齐：配置改了 extra 必须跟着变
     assert set(words) == set(handle.CMD_NAMES)

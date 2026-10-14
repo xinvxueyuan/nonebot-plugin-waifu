@@ -133,6 +133,15 @@ class Config(BaseModel):
             "默认「群友」，生产覆盖为「群幼」"
         ),
     )
+    #: 「指婚」白名单。⚠️ 键名是 **WIFE_SUPERUSERS**（用户 2026-10-14 点名，不是
+    #: WAIFU_SUPERUSERS）：插件自带白名单，不依赖宿主 NoneBot 的 SUPERUSERS。
+    wife_superusers: str = Field(
+        default="",
+        description=(
+            "「指婚」白名单：允许使用指婚的超级管理员 QQ 号（逗号/空格分隔）；"
+            "生产 = 1330509996"
+        ),
+    )
 
     @model_validator(mode="after")
     def _check_priority_order(self) -> Config:

@@ -456,6 +456,33 @@ MUTATIONS = [
         "    )",
     ),
     (
+        "MN31 指婚白名单失效（非白名单用户也能指婚）",
+        HANDLE,
+        '    return int(getattr(event, "user_id", 0) or 0) in wife_superuser_ids()',
+        "    return True",
+    ),
+    (
+        "MN32 指婚只绑第一个对象（a 只娶到 b）",
+        HANDLE,
+        "        store.clear_pending(group_id, requester=head, partner=t,"
+        ' kind="marry")\n'
+        "        store.marry(group_id=group_id, a=head, b=t)",
+        "        break",
+    ),
+    (
+        "MN33 指婚忘了剔自己（能把自己指给自己）",
+        HANDLE,
+        "    targets = [t for t in dict.fromkeys(partners) if t != head]",
+        "    targets = list(dict.fromkeys(partners))",
+    ),
+    (
+        "MN34 指婚不清旧的求婚请求（之后回发确认时语义矛盾）",
+        HANDLE,
+        "        store.clear_pending(group_id, requester=head, partner=t,"
+        ' kind="marry")',
+        "        pass",
+    ),
+    (
         "MN24 关系图接线漏传 likes（抽到的「喜欢」边全丢）",
         HANDLE,
         "        likes=store.latest_drawn_partners(gid),",

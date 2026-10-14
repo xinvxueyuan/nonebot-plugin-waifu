@@ -170,6 +170,28 @@ def divorce_notice(
     )
 
 
+def arrange_notice(
+    *,
+    head_name: str,
+    head_id: int,
+    results: Sequence[tuple[int, str]],
+    failed: str = "",
+) -> NoticeContext:
+    """「指婚」回执（**超管专用**）：每个对象一行；`failed` 是整体性错误。
+
+    与「娶老婆」回执的区别：没有确认方式/等待窗口 —— 指婚是**当场生效**的。
+    """
+    return NoticeContext(
+        title="指婚没成功" if failed else "指婚完成",
+        tone="deny" if failed else "ok",
+        headline=failed or f"{head_name} 的婚姻已由超管直接绑定",
+        avatar_user_id=head_id,
+        fields=(("生效方式", "超管指婚：视为 a 发起、b/c 同意，无需回发确认"),),
+        items=tuple(NoticeItem(uid, line) for uid, line in results),
+        note="指婚不看配偶上限、也不挡机器人；要解除用「离婚 @某人」",
+    )
+
+
 def usage_notice(*, cmd: str, lines: Sequence[str]) -> NoticeContext:
     """用法提示（不是错误，是「怎么用」）。"""
     return NoticeContext(

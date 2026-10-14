@@ -7,6 +7,20 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-14
+
+### Added
+
+- **「指婚 @a @b @c」（超管专属）**：新增命令，**仅 `WIFE_SUPERUSERS` 白名单可用**
+  （插件自带白名单，不依赖宿主 NoneBot 的 `SUPERUSERS`；生产 = `1330509996`）。
+  语义是**字面绕过双方**：第一位 @ 的人是发起人，其余人**直接**与 ta 绑定 ——
+  不产生待确认请求、不看 `WAIFU_MAX_PARTNERS`（单配下也能「a 娶 b 和 c」）、
+  不挡机器人、对方已婚也照样绑；旧的求婚 pending 同时作废。非白名单用户在
+  **响应器层**被拦掉（连用法回执都收不到，不暴露功能）。回执仍是图。
+- 新增配置键 `WIFE_SUPERUSERS`（⚠️ 键名就是 `WIFE_SUPERUSERS`，**不是**
+  `WAIFU_SUPERUSERS`）：容忍 `1330509996` / 逗号分隔 / JSON 三种写法，
+  写错格式不会让插件起不来（只是白名单里少了人）。
+
 ### Changed
 
 - **渲染器从 `nonebot-plugin-htmlkit`（litehtml）整体换成 `nonebot-plugin-htmlrender`

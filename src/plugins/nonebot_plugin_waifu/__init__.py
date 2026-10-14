@@ -32,7 +32,7 @@ from .config import plugin_config
 
 __plugin_meta__ = PluginMetadata(
     name="今日老婆",
-    description="从群内活跃成员里抽一位当老婆，支持换一只/确认/娶老婆/离婚",
+    description="从群内活跃成员里抽一位当老婆，支持换一只/确认/娶老婆/离婚/指婚",
     usage="\n".join([
         "今日老婆 / 抽老婆   当天首次抽取；再发只展示当前老婆",
         "换一只              重新抽一位（消耗次数）",
@@ -40,6 +40,7 @@ __plugin_meta__ = PluginMetadata(
         "娶老婆 @某人          需双方互相发；3 分钟内有效",
         "离婚 @某人          无需对方同意（单人即时生效）；无冷却（随离随抽）",
         "老婆关系图          本群老婆关系图；@某人 则只看 ta 的一度关系",
+        "指婚 @a @b @c       仅超管（WIFE_SUPERUSERS）：字面绕过双方，让 a 娶 b、c",
         "",
         f"每天最多 {plugin_config.waifu_daily_limit} 次（含首次与每次换一只）",
     ]),
@@ -60,6 +61,10 @@ __plugin_meta__ = PluginMetadata(
             {
                 "command": plugin_config.waifu_graph_cmd,
                 "desc": "本群老婆关系图（夫妻/倾心），可 @某人 看 ta 的",
+            },
+            {
+                "command": "指婚",
+                "desc": "仅超管（WIFE_SUPERUSERS）：字面绕过双方，第一位 @ 的娶其余人",
             },
         ],
         "order": 10,
