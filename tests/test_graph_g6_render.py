@@ -311,3 +311,93 @@ async def test_render_graph_falls_back_to_none_when_the_ready_flag_never_lands(
         await render_mod.render_graph(CLUSTERS, nicknames=NAMES, avatars=AVATARS)
         is None
     )
+
+
+# --------------------------------------------------------------------------- #
+# 用户实拍 2026-10-15：「重叠太多了」——28 人的簇（50 条边）真出图验收。
+# --------------------------------------------------------------------------- #
+BIG_N = 28
+_FLAT = [
+    "#16a34a",
+    "#7c3aed",
+    "#f97316",
+    "#e11d48",
+    "#0ea5e9",
+    "#65a30d",
+    "#c026d3",
+    "#0d9488",
+    "#ea580c",
+    "#4f46e5",
+    "#b45309",
+    "#be123c",
+]
+BIG_AV_COLOR = {uid: _FLAT[(uid - 1) % len(_FLAT)] for uid in range(1, BIG_N + 1)}
+BIG_AVATARS: dict[int, str | None] = {
+    uid: _avatar(color) for uid, color in BIG_AV_COLOR.items()
+}
+BIG_NAMES = dict.fromkeys(range(1, BIG_N + 1), "猫")
+
+
+def _big_graph():
+    likes = {1: 2}
+    likes.update(dict.fromkeys(range(2, BIG_N + 1), 1))
+    return relations.build_relations(marriages=[], crushes={}, likes=likes)
+
+
+BIG_CLUSTERS = layout.layout_graph(_big_graph(), focus=None)
+
+
+async def test_big_cluster_renders_widened_with_every_avatar_on_its_ring(tmp_path):
+    """28 人的簇：分环 → 卡片加宽 → 真渲染里 28 个头像一个不少地坐在各自位置上。
+
+    「重叠」的硬保证在 `test_layout.py` 的
+    `test_big_clusters_split_into_rings_and_never_overlap`（盒子两两不重叠）；
+    这里钉的是**渲染口径**：卡片真的跟着加宽了、每个头像都画在了 layout
+    给的坐标上（换环后位置没歪、没被裁）。
+
+    ⚠️ 这里**不调 `render.render_graph`**：htmlrender 的浏览器是**绑事件循环**的
+    模块级单例，而 pytest 每个用例一个循环 —— 本进程里第二次 `render_graph`
+    会拿到上一个（已关闭）循环的浏览器而扑空（生产只有一个循环，不受影响；
+    本文件第一个用例已经钉过 `render_graph` 那条路了）。
+    """
+    assert len(BIG_CLUSTERS) == 1
+    (cluster,) = BIG_CLUSTERS
+    assert len(cluster.nodes) == BIG_N
+    viewport = render._graph_viewport_width(BIG_CLUSTERS)
+    assert viewport > render.GRAPH_MAX_WIDTH, "大簇的视口没跟着加宽"
+
+    html = render.build_graph_html(
+        BIG_CLUSTERS, nicknames=BIG_NAMES, avatars=BIG_AVATARS
+    )
+    async with async_playwright() as pw:
+        try:
+            browser = await pw.chromium.launch()
+        except Exception as e:  # pragma: no cover
+            if "Executable doesn't exist" in str(e):
+                pytest.skip("playwright 浏览器未安装")
+            raise
+        page = await browser.new_page(
+            viewport={"width": viewport, "height": 100}, device_scale_factor=1
+        )
+        await page.goto(pathlib.Path.cwd().as_uri())
+        await page.set_content(html, wait_until="networkidle")
+        await page.wait_for_function(graph_g6.READY_EXPR, timeout=15_000)
+        full = tmp_path / "big-card.png"
+        await page.screenshot(path=str(full), full_page=True)
+        shot = tmp_path / "big-cluster1.png"
+        await page.locator("#g6-1").screenshot(path=str(shot))
+        await browser.close()
+
+    card = Img(full)
+    assert card.w == viewport, f"整卡宽 {card.w} ≠ 视口 {viewport}（被裁/被压扁）"
+    non_white = sum(
+        1 for y in range(card.h) for x in range(card.w) if card.at(x, y) != WHITE
+    )
+    assert non_white > 20_000, f"大簇卡片太素（非白像素 {non_white}）"
+
+    im = Img(shot)
+    assert (im.w, im.h) == (cluster.width, cluster.height)
+    for node in cluster.nodes:  # 每个头像都在自己的圆心位置（48x48 里占大头）
+        color = BIG_AV_COLOR[node.uid]
+        hits = im.count_near(int(node.cx) - 24, int(node.cy) - 24, 48, 48, _rgb(color))
+        assert hits > 200, f"uid={node.uid} 的头像没画在自己的位置上（{hits} px）"

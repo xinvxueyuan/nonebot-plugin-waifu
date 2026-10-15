@@ -507,6 +507,19 @@ MUTATIONS = [
         "        likes=store.latest_drawn_partners(gid),",
         "        likes={},",
     ),
+    (
+        "MN36 大簇退回单环硬塞（28 人又叠成一团，2026-10-15 实拍回归）",
+        LAYOUT,
+        "        plan = _ring_plan(len(ring))",
+        "        plan = ((float(RING_R), len(ring)),)  # 变异：人多也硬塞单环",
+    ),
+    (
+        "MN37 大簇时卡片不加宽（分环后的簇被裁掉一圈）",
+        RENDER,
+        "    return min(GRAPH_CARD_WIDTH_MAX, max(GRAPH_CARD_WIDTH,"
+        " widest + 2 * _CARD_PAD_X))",
+        "    return GRAPH_CARD_WIDTH  # 变异：卡片永远 880",
+    ),
 ]
 
 

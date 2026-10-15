@@ -539,8 +539,32 @@ _EDGE_PX: Final[dict[str, int]] = {"marriage": 4, "crush": 3, "like": 3}
 #: `layout.PAIR_SPAN(260) + 节点盒(96) + 两侧 PAD(24*2) = 404px`，两簇 808px；
 #: 普通卡片（640）的内容宽只有 590px，放不下两列。
 GRAPH_CARD_WIDTH: Final[int] = 880
-#: 关系图的渲染上限宽：必须 ≥ 卡片宽 + body padding（16*2），否则内容被压扁。
+#: 卡片宽度上限：人多的大簇会自动分多环（`layout._ring_plan`，最外环半径 616），
+#: 卡片按「最宽的簇 + 卡片内边距」跟着加宽，但不超过这个值
+#: （再宽手机上就缩到看不清了）。
+GRAPH_CARD_WIDTH_MAX: Final[int] = 1440
+#: 卡片左右内边距（见 `_BASE_CSS` 的 `.card{padding: 22px 24px}`）——算卡片宽要用。
+_CARD_PAD_X: Final[int] = 24
+#: 关系图的渲染上限宽（**基准**）：必须 ≥ 卡片宽 + body padding（16*2），
+#: 否则内容被压扁。
+#: 大簇时的实际视口宽看 `_graph_viewport_width`（基准 880 + 40 = 920 就是它）。
 GRAPH_MAX_WIDTH: Final[int] = 920
+
+
+def _graph_card_width(clusters: Sequence[ClusterLayout]) -> int:
+    """关系图卡片宽：默认 `GRAPH_CARD_WIDTH`，**有大簇就跟着加宽**（封顶 MAX）。
+
+    用户实拍 2026-10-15：28 人的簇分两环后宽 848px，超过卡片内容宽（880 − 24*2 = 832）
+    —— 不跟着加宽就会被裁掉一圈。
+    """
+    widest = max((c.width for c in clusters), default=0)
+    return min(GRAPH_CARD_WIDTH_MAX, max(GRAPH_CARD_WIDTH, widest + 2 * _CARD_PAD_X))
+
+
+def _graph_viewport_width(clusters: Sequence[ClusterLayout]) -> int:
+    """截图视口宽 = 卡片宽 + body 左右 padding（16*2）+ 8px 余量。"""
+    return _graph_card_width(clusters) + 40
+
 
 #: 边上直接写的关系名。**不再靠「→」字符表方向**（用户 2026-10-14：「倾心→」不够明确）
 #: —— 方向由 dst 端的**真箭头**承担（`layout._arrow_wings`）。夫妻无向，没有箭头。
@@ -650,7 +674,7 @@ def build_graph_html(
     )
     sub = f"{who} · {len(clusters)} 块 · {sum(len(c.lines) for c in clusters)} 条关系"
     return _GRAPH_TEMPLATE.format(
-        css=_GRAPH_CSS.replace("{card_width}", str(GRAPH_CARD_WIDTH)),
+        css=_GRAPH_CSS.replace("{card_width}", str(_graph_card_width(clusters))),
         title=html_mod.escape(title),
         sub=html_mod.escape(sub),
         clusters="".join(rows),
@@ -685,7 +709,7 @@ async def render_graph(
             build_graph_html(
                 clusters, nicknames=nicknames, avatars=avatars, focus=focus
             ),
-            width=GRAPH_MAX_WIDTH,
+            width=_graph_viewport_width(clusters),
             wait_for=graph_g6.READY_EXPR,
         )
     except Exception as e:

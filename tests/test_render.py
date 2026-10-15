@@ -356,6 +356,44 @@ def test_graph_card_is_wider_than_the_plain_card():
     assert "display: inline-block" in html  # 簇按 inline-block 排（两列并排）
 
 
+def test_graph_card_widens_for_a_big_cluster_and_stops_at_the_cap():
+    """大簇分环后比卡片内容还宽 → 卡片跟着加宽（封顶 `GRAPH_CARD_WIDTH_MAX`）。
+
+    用户实拍 2026-10-15：28 人的簇分三环后 1140px，卡片还是 880 的话会被裁掉一圈。
+    """
+    from nonebot_plugin_waifu import graph_g6, layout, render
+
+    def fake(width: int) -> layout.ClusterLayout:
+        return layout.ClusterLayout(
+            hub=1, caption="", nodes=(), lines=(), width=width, height=100
+        )
+
+    pad = 2 * render._CARD_PAD_X
+    assert render._graph_card_width(()) == render.GRAPH_CARD_WIDTH
+    assert render._graph_card_width([fake(832)]) == render.GRAPH_CARD_WIDTH
+    assert render._graph_card_width([fake(1140)]) == 1140 + pad
+    assert render._graph_card_width([fake(9999)]) == render.GRAPH_CARD_WIDTH_MAX
+    # 视口 = 卡片 + body padding(16*2) + 8：基准情形正好是老常量 920
+    assert render._graph_viewport_width(()) == render.GRAPH_MAX_WIDTH
+    assert render._graph_viewport_width([fake(1140)]) == 1140 + pad + 40
+
+    # 28 人星形 → 分环 → HTML 里的卡片宽跟着变
+    likes = {1: 2}
+    likes.update(dict.fromkeys(range(2, 29), 1))
+    from nonebot_plugin_waifu import relations
+
+    big = layout.layout_graph(
+        relations.build_relations(marriages=[], crushes={}, likes=likes), focus=None
+    )
+    assert len(big) == 1
+    html = render.build_graph_html(big, nicknames={}, avatars={})
+    card = render._graph_card_width(big)
+    assert card > render.GRAPH_CARD_WIDTH
+    assert f"width: {card}px" in html.split("<script>", 1)[0]  # 只扫卡片标记段
+    # G6 容器尺寸 = 簇宽高（坐标 1:1 的前提）
+    assert graph_g6.container_id(1) in html
+
+
 # --------------------------------------------------------------------------- #
 # 用户 2026-10-14（二）：标签不再靠「→」字符表方向（改画真箭头）+ 新关系「喜欢」
 # --------------------------------------------------------------------------- #

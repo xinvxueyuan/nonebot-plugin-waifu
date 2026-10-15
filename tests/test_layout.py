@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import itertools
 import math
 
 
@@ -441,3 +442,107 @@ def test_label_pos_slides_off_a_node_box_sitting_on_the_line():
     assert not _overlaps(chip, box), "chip 压在了线上的节点盒上"
     anchor = (lx + lay.CHIP_W / 2, ly + lay.CHIP_H)
     assert _perp_dist(anchor, line) <= 2, "滑开 ≠ 离线"
+
+
+# --------------------------------------------------------------------------- #
+# 用户实拍 2026-10-15：「重叠太多了」——28 人的簇全塞在一个半径 220 的单环上，
+# 实测 51 对盒子互压（最坏 4836px²、最小间隙 −63px）。人多必须**分环**。
+# --------------------------------------------------------------------------- #
+def _star(n: int):
+    """造 n 人星形（1 号为中心、其余都是它的「喜欢」）；n > 11 时必然要分环。"""
+    from nonebot_plugin_waifu import relations
+
+    likes = {1: 2}
+    likes.update(dict.fromkeys(range(2, n + 1), 1))
+    return relations.build_relations(marriages=[], crushes={}, likes=likes)
+
+
+def _min_axis_gap(cluster):
+    """簇内两两盒子的**最小轴间距**（`max(|dx|,|dy|) - NODE_W`；负值 = 重叠量）。
+
+    45° 斜位上的两个盒子中心距 ~100px 也会相压，所以判据只能按轴算，不能按距离。
+    """
+    worst = math.inf
+    for a, b in itertools.combinations(cluster.nodes, 2):
+        dx = max(a.x - (b.x + b.w), b.x - (a.x + a.w))
+        dy = max(a.y - (b.y + b.h), b.y - (a.y + a.h))
+        worst = min(worst, max(dx, dy))
+    return worst
+
+
+def _radii(cluster):
+    """环上节点到 hub 的距离（取整到偶数，消除取整毛刺）。"""
+    hub = next(b for b in cluster.nodes if b.uid == cluster.hub)
+    return {
+        round(math.hypot(b.cx - hub.cx, b.cy - hub.cy) / 2) * 2
+        for b in cluster.nodes
+        if b.uid != cluster.hub
+    }
+
+
+def test_big_clusters_split_into_rings_and_never_overlap():
+    """12~30 人的簇必须分环，且**两两盒子零重叠**（实拍「重叠太多了」回归钉）。"""
+    lay = _l()
+    for n in range(12, 31):
+        (cluster,) = lay.layout_graph(_star(n), focus=None)
+        gap = _min_axis_gap(cluster)
+        assert gap > 0, f"{n} 人簇还有盒子相压（最小轴间距 {gap:.0f}px）"
+        radii = _radii(cluster)
+        assert len(radii) >= 2, f"{n} 人簇没分环（半径 {radii}）"
+
+
+def test_small_clusters_keep_the_historical_single_ring():
+    """≤11 人的簇**逐像素不变**（2026-10-15 的承诺）：仍然是半径 `RING_R` 的单环。"""
+    lay = _l()
+    for n in range(3, 12):
+        (cluster,) = lay.layout_graph(_star(n), focus=None)
+        assert _radii(cluster) == {lay.RING_R}, f"{n} 人簇不在单环上：{_radii(cluster)}"
+
+
+def test_ring_plan_is_complete_deterministic_and_on_the_ladder():
+    """`_ring_plan`：人数不丢不重、半径都在梯子上、环数有上限、跑两次一模一样。"""
+    lay = _l()
+    for n in range(2, 61):
+        plan = lay._ring_plan(n)
+        assert sum(c for _r, c in plan) == n, (
+            f"{n} 人：分配合计 {sum(c for _r, c in plan)}"
+        )
+        assert 1 <= len(plan) <= lay.RING_MAX_RINGS
+        assert all(c >= 1 for _r, c in plan)
+        for i, (radius, _c) in enumerate(plan):
+            assert radius == lay.RING_R + lay.RING_GAP * i, (
+                f"{n} 人：半径 {radius} 不在梯子上"
+            )
+        assert lay._ring_plan(n) == plan, "同一人数必须给同一个分配（确定性）"
+
+
+def test_ring_plan_uses_the_fewest_rings_that_fit():
+    """能 2 环就不上 3 环（每多一环卡片就更宽）：24 人 2 环、25 人起 3 环。"""
+    lay = _l()
+    assert len(lay._ring_plan(12)) == 2
+    assert len(lay._ring_plan(24)) == 2
+    assert len(lay._ring_plan(25)) == 3
+
+
+def test_bfs_order_puts_graph_neighbours_next_to_each_other():
+    """分环后的摆放顺序 = 从 hub 出发的 BFS（相邻位置就是图里挨着的人）。"""
+    from nonebot_plugin_waifu import relations
+
+    lay = _l()
+    es = tuple(
+        relations.RelationEdge(a, b, "like")
+        for a, b in ((1, 2), (2, 3), (3, 4), (4, 5), (1, 6))
+    )
+    g = relations.RelationGraph(edges=es, nodes=(1, 2, 3, 4, 5, 6), total_edges=len(es))
+    # 1 的两条出边先按 uid 升序（2, 6），再顺着链往下（3, 4, 5）
+    assert lay._bfs_order(1, [2, 3, 4, 5, 6], g.edges) == (2, 6, 3, 4, 5)
+
+
+def test_big_cluster_labels_still_glue_to_their_own_lines():
+    """人多分了环以后，chip 底边中点**仍然贴在自己那条线上**（≤2px）。"""
+    lay = _l()
+    for n in (14, 28):
+        for cluster in lay.layout_graph(_star(n), focus=None):
+            for line in cluster.lines:
+                d = _perp_dist(_chip_center(line, lay), line)
+                assert d <= 2, f"{n} 人簇的 {line.src}->{line.dst} 标签离线 {d:.1f}px"

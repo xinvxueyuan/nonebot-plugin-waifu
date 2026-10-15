@@ -31,6 +31,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import itertools
 import math
 from typing import TYPE_CHECKING, Final
 
@@ -48,6 +49,21 @@ CANVAS_W: Final[int] = 600  # 历史画布宽（坐标已改成按内容归一�
 #: chip 贴着自己的线且不碰两端头像盒；半径 150（边只有 58px）时 chip 比线还宽，
 #: 只能压头像或漂到线外 —— 用户 2026-10-14 实拍「乱七八糟的连线都对不齐」。
 RING_R: Final[int] = 220
+#: 多环：相邻两环的半径差（px）。硬下限是 `NODE_W·√2 ≈ 136` —— 两个环上的节点
+#: 一旦落在 45° 斜位（dx≈dy≈ΔR/√2），轴对齐盒子照样会压；140 留 3px 余量。
+RING_GAP: Final[int] = 140
+#: 环上每个节点至少要占的**弧长**（px）：只用来算「粗容量」当搜索上界，
+#: 真正拍板的是 `_min_axis_gap` 的精确判定（弧长够 ≠ 斜位不压）。
+RING_MIN_ARC: Final[int] = 100
+#: 环数上限：再多弧长也够，但卡片宽度放不下（`render.GRAPH_CARD_WIDTH_MAX`）。
+RING_MAX_RINGS: Final[int] = 3
+#: **单环**上限（环上人数；加上 hub 就是 ≤11 人的簇）：历史行为逐像素不变。
+#: 实测 10 人环 0 重叠；11 人环只在斜位有 36px² 的边角接触（≈6x6px，肉眼不可见）——
+#: 属历史口径，按 2026-10-15 的承诺（小簇不动）保留，不顺手改。
+_SINGLE_RING_MAX: Final[int] = 10
+#: 盒子之间要求的最小**轴间距**（px）：`_min_axis_gap` 低于它就算「压上了」，
+#: 换更大的环数/别的分配方案重试。留 2px 是给描边与抗锯齿的余量。
+_GAP_MIN: Final[float] = 2.0
 GAP: Final[int] = 14  # 线段端点与头像之间的空隙（22 → 14：线要真的露出来）
 PAD: Final[int] = 24  # 簇内容到簇边界的留白
 PAIR_SPAN: Final[int] = 260  # 2 成员簇：两节点中心的水平距离
@@ -183,6 +199,150 @@ def _fan_angles(n: int) -> tuple[float, ...]:
                 break
             angles[i] += DECOLLINEAR_DEG
     return tuple(angles)
+
+
+def _ring_capacity(radius: float, spread: float = FAN_MAX_SPREAD) -> int:
+    """一个环的**粗容量**（搜索上界）：弧长（`2πR·spread/360`）÷ `RING_MIN_ARC`。
+
+    只是「大概能塞几个」——真正拍板的是 `_min_axis_gap` 的**精确**判定
+    （弧长够长不代表 45° 斜位上的两个轴对齐盒子不压：dx=dy≈70 时中心距 100px
+    照压 (96−70)² ≈ 676px²，所以不能只看弧长）。
+    """
+    arc = 2 * math.pi * radius * spread / 360.0
+    return max(1, int(arc // RING_MIN_ARC))
+
+
+def _ring_radii(k: int) -> tuple[float, ...]:
+    """返回 k 个环的半径：`RING_R + RING_GAP·i`。"""
+    return tuple(RING_R + RING_GAP * i for i in range(k))
+
+
+def _ring_boxes(radius: float, count: int) -> list[NodeBox]:
+    """一个环上 count 个节点的盒子（角度与摆放同源、坐标走 `_box` 取整）。"""
+    out: list[NodeBox] = []
+    for i, theta in enumerate(_fan_angles(count)):
+        ang = math.radians(theta)
+        out.append(_box(radius * math.cos(ang), radius * math.sin(ang), i))
+    return out
+
+
+def _boxes_gap(boxes: Sequence[NodeBox]) -> float:
+    """这批盒子里**两两最小轴间距**（`max(|dx|,|dy|) - NODE_W`；负值 = 重叠量）。"""
+    worst = math.inf
+    for a, b in itertools.combinations(boxes, 2):
+        dx = max(a.x - (b.x + b.w), b.x - (a.x + a.w))
+        dy = max(a.y - (b.y + b.h), b.y - (a.y + a.h))
+        worst = min(worst, max(dx, dy))
+    return worst
+
+
+def _plan_score(radii: Sequence[float], counts: Sequence[int]) -> tuple[float, float]:
+    """`(整簇最小轴间距, 各环最小轴间距里最松的那个)`。
+
+    第一个数判「**谁都不压谁**」（≥ `_GAP_MIN` 才算数）；第二个数挑「**松紧均匀**」
+    —— 越小说明没有哪一环被冷落（人数都摊平了），否则会出现「内环 3 人、外环 15 人」
+    这种偏心分配（实测：只看第一个数时就会挑出它）。
+    """
+    rings = [_ring_boxes(r, c) for r, c in zip(radii, counts, strict=True)]
+    full = _boxes_gap([_box(0.0, 0.0, 0), *(b for ring in rings for b in ring)])
+    return full, max(_boxes_gap(ring) for ring in rings)
+
+
+def _split_candidates(
+    n: int, radii: Sequence[float], caps: Sequence[int]
+) -> list[tuple[int, ...]]:
+    """候选「每环人数」：按弧长比例分配打底，再在 ±2 人内微调（环数少，枚举得起）。"""
+    arcs = [2 * math.pi * r * FAN_MAX_SPREAD / 360.0 for r in radii]
+    total = sum(arcs)
+    base = [
+        min(cap, max(1, int(n * arc / total)))
+        for arc, cap in zip(arcs, caps, strict=True)
+    ]
+    while sum(base) < n:  # 余数补给「还能塞得下最多」的环（并列时靠内）
+        room = [cap - c for c, cap in zip(base, caps, strict=True)]
+        best = max(range(len(base)), key=lambda i: (room[i], -i))
+        if room[best] <= 0:
+            break
+        base[best] += 1
+    while sum(base) > n:  # 超了就从容得下最多的环里拿回来（不动只剩 1 人的环）
+        best = max(range(len(base)), key=lambda i: (base[i] if base[i] > 1 else -1, -i))
+        if base[best] <= 1:
+            break
+        base[best] -= 1
+    deltas = (-2, -1, 0, 1, 2)
+    out: list[tuple[int, ...]] = []
+    for combo in itertools.product(deltas, repeat=len(base) - 1):
+        cand = [base[i] + combo[i] for i in range(len(base) - 1)]
+        cand.append(n - sum(cand))  # 最外环兜住差额
+        if all(1 <= c <= cap for c, cap in zip(cand, caps, strict=True)):
+            out.append(tuple(cand))
+    return out or [tuple(base)]
+
+
+def _ring_plan(n: int) -> tuple[tuple[float, int], ...]:
+    """把 n 个环上节点摊到各环：`((半径, 该环人数), ...)`（**纯函数**，可单测）。
+
+    - `n ≤ _ring_capacity(RING_R)`（默认 11 人，历史阈值）→ **单环**、半径 `RING_R`：
+      与历史逐像素一致（小簇的实拍观感与既有断言都不动）。
+    - 再多就往外加环（上限 `RING_MAX_RINGS` 环），**在候选分配里挑「最小轴间距最大」
+      的那一个**，并**精确要求它 ≥ `_GAP_MIN`**：先用 2 环试，2 环都压才上 3 环。
+    - 极端人数（4 环也放不下）→ 单环粗分配兜底（会挤，但绝不丢人）。
+    """
+    radii = _ring_radii(RING_MAX_RINGS)
+    caps = tuple(_ring_capacity(r) for r in radii)
+    if n <= _SINGLE_RING_MAX:
+        return ((float(RING_R), n),)
+    best_any: tuple[float, tuple[float, ...], tuple[int, ...]] | None = None
+    for k in range(2, RING_MAX_RINGS + 1):
+        head, head_caps = radii[:k], caps[:k]
+        best: tuple[tuple[float, float], tuple[int, ...]] | None = None
+        for counts in _split_candidates(n, head, head_caps):
+            full, looseness = _plan_score(head, counts)
+            if full < _GAP_MIN:
+                continue
+            key = (looseness, -full)  # 先「各环松紧一致」，再「尽量不挤」
+            if best is None or key < best[0]:
+                best = (key, counts)
+        if best is not None:
+            return tuple(zip(head, best[1], strict=True))
+        # 这个环数一个合法分配都没有 → 记下退路（整簇最小间距最大的那个），换更多环再试
+        for counts in _split_candidates(n, head, head_caps):
+            gap = _plan_score(head, counts)[0]
+            if best_any is None or gap > best_any[0]:
+                best_any = (gap, head, counts)
+    if best_any is not None:
+        counts = list(best_any[2])
+        counts[-1] += n - sum(counts)  # 极端人数：多的全压最外环（会挤，但绝不丢人）
+        return tuple(zip(best_any[1], counts, strict=True))
+    # 连一个候选都没生成（不可能，`_split_candidates` 至少回 base）→ 全压最外环
+    return ((radii[-1], int(n)),)
+
+
+def _bfs_order(
+    hub: int, ring: Sequence[int], edges: Iterable[RelationEdge]
+) -> tuple[int, ...]:
+    """环上节点的**摆放顺序** = 从 hub 出发的 BFS（同层按 uid 升序）。
+
+    分环以后，环上相邻位置就是图里挨着的人 → 弦更短、跨线更少、标签更好找位置。
+    纯确定性：只用 `sorted()` 定序，不掷骰子。剩下（理论上没有）按 uid 升序接在后面。
+    """
+    adj: dict[int, list[int]] = {}
+    for e in edges:
+        adj.setdefault(e.src, []).append(e.dst)
+        adj.setdefault(e.dst, []).append(e.src)
+    seen = {hub}
+    order: list[int] = []
+    queue = [hub]
+    while queue:
+        u = queue.pop(0)
+        for v in sorted(adj.get(u, ())):
+            if v in seen:
+                continue
+            seen.add(v)
+            order.append(v)
+            queue.append(v)
+    order.extend(u for u in sorted(ring) if u not in seen)
+    return tuple(order)
 
 
 def _segment(
@@ -467,11 +627,21 @@ def _cluster(
         boxes[left] = _box(-PAIR_SPAN / 2, 0.0, left)
         boxes[right] = _box(PAIR_SPAN / 2, 0.0, right)
     else:
-        # ≥3 成员 → 扇形：hub 在下、环上节点按张角散在上方（任意两条边不共线）
+        # ≥3 成员 → 扇形：hub 在簇中心、环上节点按张角散开（任意两条边不共线）。
+        # 人多时自动分多环（`_ring_plan`）：半径 220/352/484/616，人数按弧长比例分配
+        # —— 用户实拍 2026-10-15：28 人挤在单环上时 51 对盒子互压。
         boxes[hub] = _box(0.0, 0.0, hub)
-        for uid, theta in zip(ring, _fan_angles(len(ring)), strict=True):
-            ang = math.radians(theta)
-            boxes[uid] = _box(RING_R * math.cos(ang), RING_R * math.sin(ang), uid)
+        plan = _ring_plan(len(ring))
+        # 单环沿用历史顺序（uid 升序）→ 小簇逐像素不变；分环后按 BFS 排序，
+        # 让图里挨着的人落在相邻位置（弦短、跨线少）。
+        order: Sequence[int] = ring if len(plan) == 1 else _bfs_order(hub, ring, es)
+        start = 0
+        for radius, count in plan:
+            uids = order[start : start + count]
+            start += count
+            for uid, theta in zip(uids, _fan_angles(len(uids)), strict=True):
+                ang = math.radians(theta)
+                boxes[uid] = _box(radius * math.cos(ang), radius * math.sin(ang), uid)
     known = tuple(boxes.values())
     shifts = _pair_shifts(es, boxes)
     lines: list[EdgeLine] = []
