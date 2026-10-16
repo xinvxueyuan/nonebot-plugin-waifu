@@ -142,7 +142,9 @@ async def test_graph_command_draw_edge_reaches_the_rendered_html(monkeypatch):
     store.set_daily(group_id=GROUP, user_id=A, date_key=DAY, partner_id=B)
     captured = {}
 
-    async def _fake_render_graph(clusters, *, nicknames, avatars=None, focus=None):
+    async def _fake_render_graph(
+        clusters, *, nicknames, avatars=None, focus=None, missing=()
+    ):
         captured["clusters"] = clusters
         captured["nicknames"] = nicknames
         return b"PNG"
@@ -216,3 +218,108 @@ async def test_graph_command_keeps_both_directions_of_mutual_likes(monkeypatch):
     assert len(like_line) == 1
     assert f"n{A} → n{B}" in like_line[0]
     assert f"n{B} → n{A}" in like_line[0]
+
+
+# --------------------------------------------------------------------------- #
+# 用户 2026-10-17：「老婆关系图 @A @B」——**允许 @ 多个**，出一张合并图
+#   （每个人的 1 度关系都画上；有人没关系的只注明；全都没关系才回提示卡）
+# --------------------------------------------------------------------------- #
+def _multi(**kw) -> Message:
+    """构造 `@A @B ...` 的命令参数（用 MessageSegment.at）。"""
+    from nonebot.adapters.onebot.v11 import MessageSegment
+
+    msg = Message()
+    for uid in kw["ats"]:
+        msg += MessageSegment.at(uid)
+    return msg
+
+
+@pytest.mark.asyncio
+async def test_graph_command_merges_multiple_at_into_one_image(monkeypatch):
+    """真数据：`@A @B` → **一张**图；两段关系（A→B 的喜欢 + C→A 的喜欢）都在簇里。"""
+    from nonebot_plugin_waifu import handle, render, store
+
+    d = 40004  # 与 A 毫无关系的第四人：这样「只画第一个中心」的变异体才藏不住
+    store.touch_member(group_id=GROUP, user_id=d, nickname=f"n{d}")
+    store.set_daily(group_id=GROUP, user_id=A, date_key=DAY, partner_id=B)  # A 喜欢 B
+    store.set_daily(group_id=GROUP, user_id=C, date_key=DAY, partner_id=d)  # C 喜欢 d
+
+    captured: dict = {}
+
+    async def _fake(clusters, *, nicknames, avatars=None, focus=None, missing=()):
+        captured["clusters"] = clusters
+        captured["focus"] = focus
+        captured["missing"] = missing
+        return b"PNG"
+
+    monkeypatch.setattr(render, "fetch_avatars", AsyncMock(return_value={}))
+    monkeypatch.setattr(render, "render_graph", _fake)
+    bot = _bot()
+    await handle._h_graph(bot=bot, event=_event(), args=_multi(ats=(A, C)))
+
+    assert [s.type for s in bot.send_group_msg.await_args.kwargs["message"]] == [
+        "image"
+    ]
+    uids = {n.uid for c in captured["clusters"] for n in c.nodes}
+    assert uids == {A, B, C, d}, f"合并图没把两个人的关系都画上：{uids}"
+    assert captured["focus"] == (A, C)
+    assert captured["missing"] == ()
+    html = render.build_graph_html(
+        captured["clusters"],
+        nicknames={"n": ""},
+        avatars={},
+        focus=(A, C),
+        missing=(),
+    )
+    assert "以「" in html and "」为中心" in html  # 副标题写多中心
+
+
+@pytest.mark.asyncio
+async def test_graph_command_multi_notes_the_ones_without_relations(monkeypatch):
+    """`@A @C`（C 没有任何关系）→ 照画 A 的那部分，页脚注明「C 还没有任何关系」。"""
+    from nonebot_plugin_waifu import handle, render, store
+
+    store.marry(group_id=GROUP, a=A, b=B)  # 只有 A-B 有关系；C 没有
+    captured: dict = {}
+
+    async def _fake(clusters, *, nicknames, avatars=None, focus=None, missing=()):
+        captured["missing"] = missing
+        captured["clusters"] = clusters
+        return b"PNG"
+
+    monkeypatch.setattr(render, "fetch_avatars", AsyncMock(return_value={}))
+    monkeypatch.setattr(render, "render_graph", _fake)
+    bot = _bot()
+    await handle._h_graph(bot=bot, event=_event(), args=_multi(ats=(A, C)))
+
+    assert [s.type for s in bot.send_group_msg.await_args.kwargs["message"]] == [
+        "image"
+    ]
+    assert captured["missing"] == (f"n{C}",)  # 页脚那条注记带着 ta 的名字
+    html = render.build_graph_html(
+        captured["clusters"],
+        nicknames={C: f"n{C}"},
+        avatars={},
+        missing=captured["missing"],
+    )
+    assert f"n{C} 还没有任何关系" in html
+
+
+@pytest.mark.asyncio
+async def test_graph_command_multi_all_without_relations_falls_back_to_notice(
+    monkeypatch,
+):
+    """`@C @D`（全都没关系）→ 不画图，回「这些人还没有任何老婆关系」的提示卡。"""
+    from nonebot_plugin_waifu import handle, render, store
+
+    store.marry(group_id=GROUP, a=A, b=B)  # C 与 D 都没有关系
+    d = 40004
+    store.touch_member(group_id=GROUP, user_id=d, nickname=f"n{d}")
+    bot = _bot()
+    monkeypatch.setattr(render, "fetch_avatars", AsyncMock(return_value={}))
+    monkeypatch.setattr(render, "render_notice", AsyncMock(return_value=None))
+    await handle._h_graph(bot=bot, event=_event(), args=_multi(ats=(C, d)))
+
+    msg = bot.send_group_msg.await_args.kwargs["message"]
+    assert [s.type for s in msg] == ["at", "text"]
+    assert "还没有任何老婆关系" in msg[1].data["text"]

@@ -237,10 +237,17 @@ def graph_empty_notice(*, members: int) -> NoticeContext:
     )
 
 
-def no_relations_notice(*, focus_id: int) -> NoticeContext:
-    """@了人，但 ta 还没有任何关系。"""
+def no_relations_notice(
+    *, focus_id: int, extra_ids: Sequence[int] = ()
+) -> NoticeContext:
+    """@了人，但 ta（们）还没有任何关系。
+
+    `extra_ids`：多人 `@` 时**全都没有关系**才走这里（有人有关系就照画合并图、
+    只在页脚注明）—— 用户 2026-10-17 口径。
+    """
+    many = bool(extra_ids)
     return NoticeContext(
-        title="ta 还没有任何老婆关系",
+        title="这些人还没有任何老婆关系" if many else "ta 还没有任何老婆关系",
         tone="info",
         avatar_user_id=focus_id,
         fields=(("说明", "既没有夫妻、也没有倾心、也没有喜欢"),),

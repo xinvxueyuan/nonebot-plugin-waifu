@@ -166,3 +166,38 @@ def test_likes_is_a_required_keyword_argument():
     r = _r()
     with pytest.raises(TypeError):
         r.build_relations(marriages=[(1, 2, 1.0)], crushes={3: 1})  # type: ignore[call-arg]
+
+
+# --------------------------------------------------------------------------- #
+# 用户 2026-10-17：`老婆关系图 @A @B` 的合并视图（多中心，口径同单个 @）
+# --------------------------------------------------------------------------- #
+def _multi_graph():
+    from nonebot_plugin_waifu import relations
+
+    es = tuple(
+        relations.RelationEdge(a, b, "like")
+        for a, b in ((1, 2), (3, 1), (4, 5))  # 1-2 与 3-1 连着 1；4-5 与谁都不连
+    )
+    return relations.RelationGraph(edges=es, nodes=(1, 2, 3, 4, 5), total_edges=len(es))
+
+
+def test_ego_many_is_the_union_of_each_ones_neighbourhood():
+    """多中心 = 各自 1 度关系的并集；与这些人都无关的边被去掉。"""
+    g = _multi_graph()
+    got = g.ego_many((1, 4))
+    assert {(e.src, e.dst) for e in got.edges} == {(1, 2), (3, 1), (4, 5)}
+    assert got.nodes == (1, 2, 3, 4, 5)
+    assert got.total_edges == 3  # 与 `ego` 同口径：total_edges = 保留下来的条数
+
+
+def test_ego_many_dedupes_and_keeps_one_copy_of_shared_edges():
+    """同一个中心重复给、或两个人共用的边，只留一条。"""
+    g = _multi_graph()
+    assert g.ego_many((1, 1)) == g.ego(1)
+    assert g.ego_many((1, 3)).edges == g.ego_many((3, 1)).edges
+
+
+def test_ego_many_empty_gives_an_empty_graph():
+    """空传入 = 空图（调用方自己决定怎么提示，别在这里兜底）。"""
+    got = _multi_graph().ego_many(())
+    assert got.edges == () and got.nodes == ()

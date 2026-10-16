@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Iterable, Mapping, Sequence
 
 #: 边类型
 KIND_MARRIAGE: Final[str] = "marriage"
@@ -68,6 +68,17 @@ class RelationGraph:
     def ego(self, focus: int) -> RelationGraph:
         """自我中心网络：只留**与 focus 相连**的边（焦点 + 一度关系）。"""
         keep = tuple(e for e in self.edges if focus in (e.src, e.dst))
+        nodes = tuple(sorted({m for e in keep for m in (e.src, e.dst)}))
+        return RelationGraph(edges=keep, nodes=nodes, total_edges=len(keep))
+
+    def ego_many(self, focuses: Sequence[int]) -> RelationGraph:
+        """**多中心**合并视图：只留与其中**任何一人**相连的边（各自的 1 度关系并起来）。
+
+        用户 2026-10-17：`老婆关系图 @A @B` 出一张合并图 —— 口径与单个 `@` 完全一致，
+        只是中心多了几个。空 `focuses` = 空图（调用方自己决定怎么提示）。
+        """
+        wanted = {int(f) for f in focuses}
+        keep = tuple(e for e in self.edges if e.src in wanted or e.dst in wanted)
         nodes = tuple(sorted({m for e in keep for m in (e.src, e.dst)}))
         return RelationGraph(edges=keep, nodes=nodes, total_edges=len(keep))
 

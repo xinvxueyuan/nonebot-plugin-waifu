@@ -28,7 +28,7 @@ import pathlib
 from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from .layout import ClusterLayout
     from .relations import RelationGraph
@@ -635,18 +635,45 @@ def _cluster_html(cluster: ClusterLayout, *, index: int = 1) -> str:
     )
 
 
+def _focus_names(
+    focus: int | Sequence[int] | None, nicknames: Mapping[int, str]
+) -> list[str]:
+    """「以「A、B」为中心」里的那串名字（`None` → 空 = 本群全部）。"""
+    if focus is None:
+        return []
+    ids = (focus,) if isinstance(focus, int) else tuple(focus)
+    return [(nicknames.get(int(u)) or "").strip() or str(u) for u in ids]
+
+
+def _focus_prefix(
+    focus: int | Sequence[int] | None, nicknames: Mapping[int, str]
+) -> str:
+    """图卡副标题里的「以「A、B」为中心」；没有焦点就是「本群全部」。"""
+    names = _focus_names(focus, nicknames)
+    return "以「" + "、".join(names) + "」为中心" if names else "本群全部"
+
+
+def _missing_line(missing: Sequence[str]) -> str:
+    """页脚那条「A、B 还没有任何关系」（多人 @ 时有人没关系的注记）。"""
+    return "、".join(missing) + " 还没有任何关系" if missing else ""
+
+
 def build_graph_html(
     clusters: Sequence[ClusterLayout],
     *,
     nicknames: dict[int, str],
     avatars: dict[int, str | None] | None = None,
-    focus: int | None = None,
+    focus: int | Sequence[int] | None = None,
+    missing: Sequence[str] = (),
     title: str = "老婆关系图",
 ) -> str:
     """拼关系图 HTML（**纯函数**，转义都在这里做）。
 
     **排布**：2 成员簇两列并排（每行两个 `.cluster`），大簇（≥3 成员）独占一行 ——
     实拍里 4 个 2 成员簇各占一行、整图 2271px 高，用户要求「排紧一点」。
+
+    `focus` 可以是**多个**（`老婆关系图 @A @B`：合图、副标题写「以「A、B」为中心」）；
+    `missing` = 没有任何关系的人名 → 追加到**页脚**（用户 2026-10-17 口径）。
     """
     pool = avatars or {}
     rows: list[str] = []
@@ -667,12 +694,9 @@ def build_graph_html(
             flush_pairs()
             rows.append(f'<div class="row">{block}</div>')
     flush_pairs()
-    who = (
-        f"以「{html_mod.escape((nicknames.get(focus) or str(focus)).strip())}」为中心"
-        if focus
-        else "本群全部"
-    )
+    who = _focus_prefix(focus, nicknames)
     sub = f"{who} · {len(clusters)} 块 · {sum(len(c.lines) for c in clusters)} 条关系"
+    note = _missing_line(missing)
     return _GRAPH_TEMPLATE.format(
         css=_GRAPH_CSS.replace("{card_width}", str(_graph_card_width(clusters))),
         title=html_mod.escape(title),
@@ -687,7 +711,7 @@ def build_graph_html(
             widths=_EDGE_PX,
             labels=_EDGE_LABEL,
         ),
-        footer=html_mod.escape(_GRAPH_LEGEND),
+        footer=html_mod.escape(_GRAPH_LEGEND + (f"　·　{note}" if note else "")),
     )
 
 
@@ -696,7 +720,8 @@ async def render_graph(
     *,
     nicknames: dict[int, str],
     avatars: dict[int, str | None] | None = None,
-    focus: int | None = None,
+    focus: int | Sequence[int] | None = None,
+    missing: Sequence[str] = (),
 ) -> bytes | None:
     """渲染关系图 PNG。**任何失败都只 warning 并返回 None**（调用方回退纯文本）。
 
@@ -707,7 +732,11 @@ async def render_graph(
     try:
         return await _shot(
             build_graph_html(
-                clusters, nicknames=nicknames, avatars=avatars, focus=focus
+                clusters,
+                nicknames=nicknames,
+                avatars=avatars,
+                focus=focus,
+                missing=missing,
             ),
             width=_graph_viewport_width(clusters),
             wait_for=graph_g6.READY_EXPR,
@@ -721,15 +750,22 @@ def build_graph_fallback_text(
     graph: RelationGraph,
     *,
     nicknames: dict[int, str],
-    focus: int | None = None,
+    focus: int | Sequence[int] | None = None,
+    missing: Sequence[str] = (),
 ) -> str:
-    """纯文本回退（**无 `@`**；关系说明与图 footer 用同一条 `_GRAPH_LEGEND`）。"""
+    """纯文本回退（**无 `@`**；关系说明与图 footer 用同一条 `_GRAPH_LEGEND`）。
+
+    `focus` 支持多个（`@A @B` 的合并图回退时写「以「A、B」为中心」）；
+    `missing` = 没有任何关系的人名（与图卡页脚同一条注记）。
+    """
 
     def name(uid: int) -> str:
         return (nicknames.get(uid) or "").strip() or str(uid)
 
+    names = _focus_names(focus, nicknames)
+    who = "（以「" + "、".join(names) + "」为中心）" if names else "（本群）"
     lines = [
-        "老婆关系图" + (f"（以「{name(focus)}」为中心）" if focus else "（本群）"),
+        "老婆关系图" + who,
         f"共 {len(graph.nodes)} 人 · {len(graph.edges)} 条关系",
     ]
     for kind, label in (("marriage", "夫妻"), ("crush", "倾心"), ("like", "喜欢")):
@@ -741,6 +777,9 @@ def build_graph_fallback_text(
         if got:
             lines.append(f"{label}：" + "，".join(got))
     lines.append(_GRAPH_LEGEND)
+    note = _missing_line(missing)
+    if note:
+        lines.append(f"（{note}）")
     if len(graph.edges) < graph.total_edges:
         lines.append(f"（还有 {graph.total_edges - len(graph.edges)} 条未显示）")
     return "\n".join(lines)[:1200]

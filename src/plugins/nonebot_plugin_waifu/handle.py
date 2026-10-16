@@ -974,10 +974,14 @@ async def _h_divorce(
 async def _h_graph(
     bot: Bot, event: GroupMessageEvent, args: Message = CommandArg()
 ) -> None:
-    """老婆关系图 [@某人]：无参 = 本群全部；@某人 = 以 ta 为中心的一度关系。"""
+    """老婆关系图 [@某人 ...]：无参 = 本群全部；@人 = 以 ta（们）为中心的一度关系。
+
+    多人（用户 2026-10-17）：**一张合并图**（每个人的 1 度关系并起来，副标题写
+    「以「A、B」为中心」）；其中有人没有任何关系时**照画**，只在页脚注明；
+    **全都没有**关系才回「还没有任何关系」的提示卡。
+    """
     gid = event.group_id
     targets = _resolve_target(event, args)
-    focus = targets[0] if targets else None
     g = relations.build_relations(
         marriages=store.list_marriages(gid),
         crushes=store.latest_locked_partners(gid),
@@ -989,16 +993,38 @@ async def _h_graph(
             bot, event, notices.graph_empty_notice(members=store.count_members(gid))
         )
         return
-    view = g.ego(focus) if focus is not None else g
-    # 无参时 view 就是 g（上面已确认非空），所以只有「@了人、但 ta 没有关系」能进来。
-    if focus is not None and not view.edges:
-        await _send_notice(bot, event, notices.no_relations_notice(focus_id=focus))
+    # 「@了人但没有任何关系」：多人时只注明（照画有关系的部分），全都没关系才改回执
+    missing_ids = [t for t in targets if g.degree(t) == 0]
+    if targets and len(missing_ids) == len(targets):
+        first, *rest = missing_ids
+        await _send_notice(
+            bot,
+            event,
+            notices.no_relations_notice(focus_id=first, extra_ids=tuple(rest)),
+        )
         return
+    if len(targets) == 1:
+        view = g.ego(targets[0])  # 单人：与历史完全一致（焦点簇、副标题不变）
+    else:
+        view = g.ego_many(targets) if targets else g
     nicknames = {int(r["user_id"]): str(r["nickname"]) for r in store.list_members(gid)}
-    clusters = layout.layout_graph(view, focus=focus)
+    focus: int | tuple[int, ...] | None = (
+        targets[0] if len(targets) == 1 else (tuple(targets) or None)
+    )
+    missing_names = tuple(
+        (nicknames.get(t) or "").strip() or str(t) for t in missing_ids
+    )
+    # 单人走「焦点簇」布局；多人合并图按连通分量出簇（`focus` 只影响副标题）
+    clusters = layout.layout_graph(
+        view, focus=focus if isinstance(focus, int) else None
+    )
     avatars = await render.fetch_avatars(layout.node_ids(clusters))
     png = await render.render_graph(
-        clusters, nicknames=nicknames, avatars=avatars, focus=focus
+        clusters,
+        nicknames=nicknames,
+        avatars=avatars,
+        focus=focus,
+        missing=missing_names,
     )
     if png is not None:
         await bot.send_group_msg(
@@ -1011,7 +1037,10 @@ async def _h_graph(
             message=Message(
                 MessageSegment.text(
                     render.build_graph_fallback_text(
-                        view, nicknames=nicknames, focus=focus
+                        view,
+                        nicknames=nicknames,
+                        focus=focus,
+                        missing=missing_names,
                     )
                 )
             ),

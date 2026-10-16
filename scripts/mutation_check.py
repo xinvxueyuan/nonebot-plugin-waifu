@@ -551,6 +551,24 @@ MUTATIONS = [
         '            f"UPDATE {_T_DAILY} SET partner_id = user_id,"'
         ' " draws_used = 0, updated_at = ?"',
     ),
+    (
+        "MN42 多人 @ 只取第一个（合并图退回旧 targets[0]）",
+        HANDLE,
+        "        view = g.ego_many(targets) if targets else g",
+        "        view = g.ego(targets[0]) if targets else g  # 变异：只画第一个",
+    ),
+    (
+        "MN43 有人没关系的提示丢了（页脚不注明）",
+        RENDER,
+        "    note = _missing_line(missing)\n    return _GRAPH_TEMPLATE.format(",
+        '    note = ""  # 变异：不注明\n    return _GRAPH_TEMPLATE.format(',
+    ),
+    (
+        "MN44 全都没关系时照样硬画一张空图（不回提示卡）",
+        HANDLE,
+        "    if targets and len(missing_ids) == len(targets):",
+        "    if False:  # 变异：全都没关系也硬画",
+    ),
 ]
 
 
