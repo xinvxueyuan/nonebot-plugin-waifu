@@ -483,3 +483,38 @@ def test_latest_drawn_partners_is_not_the_locked_source(tmp_store):
 
     assert store.latest_drawn_partners(100) == {1: 3}
     assert store.latest_locked_partners(100) == {1: 2}
+
+
+def test_clear_drawn_partner_keeps_the_counter_and_blocks_self_lock(tmp_store):
+    """用户 2026-10-17：清掉当天抽到的那位 —— 计数原样、也不能把自己锁成「倾心」。"""
+    from nonebot_plugin_waifu import store
+
+    store.set_daily(group_id=100, user_id=1, date_key="2026-10-17", partner_id=2)
+    assert store.clear_drawn_partner(group_id=100, user_id=1, date_key="2026-10-17")
+
+    row = store.get_daily(100, 1, "2026-10-17")
+    assert int(row["partner_id"]) == 1, "该自指向（图上的自环会被过滤掉）"
+    assert int(row["draws_used"]) == 1, "计数被动了 = 白送一次抽取"
+    assert store.latest_drawn_partners(100) == {1: 1}
+
+    # 没有可确认的对象：别把自指向锁成「倾心」
+    assert store.lock_daily(100, 1, "2026-10-17") is False
+    assert store.get_locked_partner(100, 1, "2026-10-17") is None
+    assert store.latest_locked_partners(100) == {}
+
+    # 当天没有记录 → False（幂等，别报错）
+    assert (
+        store.clear_drawn_partner(group_id=100, user_id=1, date_key="1999-01-01")
+        is False
+    )
+
+
+def test_clear_drawn_partner_keeps_the_drawn_exclusion_set(tmp_store):
+    """清掉**不**影响「今天已经抽到过谁」的排除集（下次不会再抽到他）。"""
+    from nonebot_plugin_waifu import store
+
+    store.set_daily(group_id=100, user_id=1, date_key="2026-10-17", partner_id=2)
+    store.record_drawn(group_id=100, user_id=1, date_key="2026-10-17", partner_id=2)
+    store.clear_drawn_partner(group_id=100, user_id=1, date_key="2026-10-17")
+
+    assert store.drawn_partners(100, 1, "2026-10-17") == {2}

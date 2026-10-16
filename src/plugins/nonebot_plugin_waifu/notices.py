@@ -56,6 +56,28 @@ def quota_notice(*, used: int, limit: int) -> NoticeContext:
     )
 
 
+def today_gone_notice(*, used: int, limit: int) -> NoticeContext:
+    """次数用尽后再看「今日老婆」：当天最后抽到的那位**已经不算数了**。
+
+    用户 2026-10-17 口径：被配额挡下的那一刻起，最后抽到的那位就不算了
+    （关系图上也不再画成「喜欢」），直到他重新抽到新人 —— 跨天没抽也算那天。
+
+    ⚠️ 文案要求（用户原话）：「文案合适一点，抹去之类的技术词不要出现」——
+    别写「抹去 / 作废 / 失效 / 登记」这类词。
+    """
+    return NoticeContext(
+        title="今天的老婆飞走了",
+        tone="warn",
+        headline=f"次数用尽（{used}/{limit}），最后抽到的那位已经不算数了",
+        fields=(
+            ("为什么", "次数用尽还接着抽，最后一只就不算了"),
+            ("现在", "今天没有老婆了"),
+            ("什么时候能再抽", "明天（跨天自动恢复）"),
+        ),
+        note="明天再来抽吧",
+    )
+
+
 def all_drawn_notice(*, drawn: int, candidates: int) -> NoticeContext:
     """今天群里的人已经抽遍。"""
     from .rules import ALL_DRAWN_MESSAGE

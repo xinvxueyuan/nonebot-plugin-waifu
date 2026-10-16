@@ -411,3 +411,82 @@ async def test_draw_handlers_send_locked_notice_as_image(monkeypatch, name):
     assert sent.await_count == 0
     msg = bot.send_group_msg.await_args.kwargs["message"]
     assert [seg.type for seg in msg] == ["at", "image"]
+
+
+# --------------------------------------------------------------------------- #
+# 用户 2026-10-17：「次数用尽后，最后抽到的那位不算数了」
+#   —— 被配额挡下（输出用尽模板）的那一刻清掉；关系图上不再画成「喜欢」；
+#      跨天没抽就一直空着，直到他重新抽到新人。
+# --------------------------------------------------------------------------- #
+def _fill_quota(date_key: str, times: int = 20) -> None:
+    """把 ME 当天的次数用满（`set_daily` 每次 +1）。"""
+    from nonebot_plugin_waifu import store
+
+    for _ in range(times):
+        store.set_daily(group_id=GROUP, user_id=ME, date_key=date_key, partner_id=OTHER)
+
+
+@pytest.mark.asyncio
+async def test_quota_deny_clears_the_last_drawn_but_keeps_the_count():
+    """被配额挡下 → 照旧输出「用尽」模板，**同时**最后抽到的那位不再算数。"""
+    from nonebot_plugin_waifu import handle, store
+
+    today = handle._today()
+    store.set_daily(group_id=GROUP, user_id=ME, date_key=today, partner_id=OTHER)
+    _fill_quota(today, times=19)  # 合计满 20
+
+    err = await handle._do_draw(bot=MagicMock(), event=_event(ME), redraw=True)
+    assert err is not None
+    assert err.title == "渣男，你今天没有老婆了！"  # 用尽模板一个字不改
+
+    row = store.get_daily(GROUP, ME, today)
+    assert int(row["partner_id"]) == ME, "最后抽到的那位还挂在记录里"
+    assert int(row["draws_used"]) == 20, "计数被清掉了（会白送一次抽取）"
+    assert store.get_locked_partner(GROUP, ME, today) is None
+
+
+@pytest.mark.asyncio
+async def test_today_after_quota_shows_the_gone_notice_not_the_person():
+    """清掉之后再发「今日老婆」：走「飞走了」提示，**不再露出那一位**。"""
+    from nonebot_plugin_waifu import handle, store
+
+    today = handle._today()
+    store.set_daily(group_id=GROUP, user_id=ME, date_key=today, partner_id=OTHER)
+    _fill_quota(today, times=19)
+    await handle._do_draw(bot=MagicMock(), event=_event(ME), redraw=True)
+
+    got = await handle._do_draw(bot=MagicMock(), event=_event(ME), redraw=False)
+    assert got is not None
+    assert got.title == "今天的老婆飞走了"
+    assert got.avatar_user_id is None
+    assert str(OTHER) not in got.headline  # 那一位不会再出现
+    assert "不算数" in got.headline  # 也不用「抹去/作废」这类词
+
+
+@pytest.mark.asyncio
+async def test_cleared_draw_keeps_the_graph_blank_even_across_days():
+    """关系图：清掉后一直空着 —— **更早的记录（前几天抽的人）也不许露出来**。
+
+    跨天没抽 → 当天那行（自指向）仍是 `date_key` 最大的一行 → 图上没有他的「喜欢」；
+    自指向被 `relations.build_relations` 的自环过滤吃掉，不需要关系层加特例。
+    """
+    from nonebot_plugin_waifu import handle, relations, store
+
+    today = handle._today()
+    store.set_daily(  # 昨天抽的是 30003
+        group_id=GROUP, user_id=ME, date_key="1999-01-01", partner_id=30003
+    )
+    store.set_daily(group_id=GROUP, user_id=ME, date_key=today, partner_id=OTHER)
+    _fill_quota(today, times=19)
+    await handle._do_draw(bot=MagicMock(), event=_event(ME), redraw=True)
+
+    likes = store.latest_drawn_partners(GROUP)
+    assert likes[ME] == ME  # 自指向（当天那行仍是最大 date_key）
+    g = relations.build_relations(marriages=[], crushes={}, likes=likes)
+    assert all(e.src != ME for e in g.edges), "清掉后图上还有他的边"
+
+    # 重新抽到新人 → 以新记录为准
+    store.set_daily(group_id=GROUP, user_id=ME, date_key=today, partner_id=30003)
+    likes2 = store.latest_drawn_partners(GROUP)
+    g2 = relations.build_relations(marriages=[], crushes={}, likes=likes2)
+    assert any(e.src == ME and e.dst == 30003 for e in g2.edges)

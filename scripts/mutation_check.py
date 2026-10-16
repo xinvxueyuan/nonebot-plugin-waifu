@@ -520,6 +520,37 @@ MUTATIONS = [
         " widest + 2 * _CARD_PAD_X))",
         "    return GRAPH_CARD_WIDTH  # 变异：卡片永远 880",
     ),
+    (
+        "MN38 用尽时不擦（用尽后最后抽到的仍在关系图上算「喜欢」）",
+        HANDLE,
+        "        store.clear_drawn_partner(group_id=gid, user_id=me, date_key=today)",
+        "        pass  # 变异：被配额挡下也不清",
+    ),
+    (
+        "MN39 清掉后「今日老婆」又露出那一位（少一次自指向判断）",
+        HANDLE,
+        "        if partner == me:",
+        "        if False:  # 变异：继续露出那一位",
+    ),
+    (
+        "MN40 确认老婆把「已清掉」的自指向锁成倾心（把自己锁给自己）",
+        STORE,
+        """        if partner_id == user_id:
+            # 已被配额清掉的那天（partner 自指向）→ 没有可确认的对象，
+            # 别把自己锁成「倾心」（用户 2026-10-17 口径）。
+            return False
+""",
+        """        if False:  # 变异：把自指向也锁成倾心
+            return False
+""",
+    ),
+    (
+        "MN41 清掉时把计数也清了（白送一次抽取）",
+        STORE,
+        '            f"UPDATE {_T_DAILY} SET partner_id = user_id, updated_at = ?"',
+        '            f"UPDATE {_T_DAILY} SET partner_id = user_id,"'
+        ' " draws_used = 0, updated_at = ?"',
+    ),
 ]
 
 

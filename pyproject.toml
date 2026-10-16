@@ -1,6 +1,6 @@
 [project]
 name = "nonebot-plugin-waifu"
-version = "0.7.1"
+version = "0.7.2"
 description = "今日老婆：从群内活跃成员里抽一位当老婆，支持换一只/确认/娶老婆/离婚"
 keywords = ["nonebot2", "nonebot", "bot", "waifu", "marriage", "group-management"]
 readme = "README.md"

@@ -339,6 +339,10 @@ def lock_daily(group_id: int, user_id: int, date_key: str) -> bool:
         if row is None:
             return False
         partner_id = int(row["partner_id"])
+        if partner_id == user_id:
+            # 已被配额清掉的那天（partner 自指向）→ 没有可确认的对象，
+            # 别把自己锁成「倾心」（用户 2026-10-17 口径）。
+            return False
         now = time.time()
         conn.execute(
             f"INSERT INTO {_T_LOCK}"
@@ -355,6 +359,28 @@ def lock_daily(group_id: int, user_id: int, date_key: str) -> bool:
             (now, group_id, user_id, date_key),
         )
         return True
+
+
+def clear_drawn_partner(*, group_id: int, user_id: int, date_key: str) -> bool:
+    """把当天抽到的那位**清掉**（`partner_id` 自指向）→ 关系图上不再算「喜欢」。
+
+    用户 2026-10-17 口径：被配额挡下的那一刻（「渣男，你今天没有老婆了！」那句），
+    **最后抽到的那位就不算数了**；直到他下次抽到新人以前，图上一直空着（跨天没抽也算）。
+
+    - 自指向会被 `relations.build_relations` 的**自环过滤**吃掉 → 图上自然没有这条边，
+      不需要给关系层加特例；同理「确认老婆」也不会把自指向锁成「倾心」
+      （`lock_daily` 见自指向直接返回 False）。
+    - `draws_used` / `date_key` / `locked` **原样保留** —— 不能因为清掉就白送次数
+      （否则再发「今日老婆」会重新抽一只，等于免费加抽）。
+    - 返回是否真的清到了（当天没有记录 → False）。
+    """
+    with _conn() as conn:
+        cur = conn.execute(
+            f"UPDATE {_T_DAILY} SET partner_id = user_id, updated_at = ?"
+            " WHERE group_id = ? AND user_id = ? AND date_key = ?",
+            (time.time(), group_id, user_id, date_key),
+        )
+        return cur.rowcount > 0
 
 
 def locked_partners(group_id: int, user_id: int, date_key: str) -> set[int]:
@@ -596,6 +622,7 @@ def purge_pending_before(*, now: float, window: float) -> int:
 
 
 __all__ = [
+    "clear_drawn_partner",
     "clear_pending",
     "count_members",
     "count_partners",

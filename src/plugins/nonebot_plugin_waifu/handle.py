@@ -354,17 +354,28 @@ async def _do_draw(
         )
 
     if action.action == "deny":
+        # 用户 2026-10-17 口径：被配额挡下的这一刻（输出「用尽」模板的那段逻辑），
+        # **最后抽到的那位就不算数了** —— 关系图上不再画成「喜欢」，直到他下次
+        # 抽到新人（跨天没抽也算那天）。计数原样保留，不白送次数。
+        store.clear_drawn_partner(group_id=gid, user_id=me, date_key=today)
         return notices.quota_notice(
             used=int(existing["draws_used"]) if existing is not None else 0,
             limit=plugin_config.waifu_daily_limit,
         )
 
     if action.action == "show" and action.row is not None:
+        partner = int(action.row["partner_id"])
+        if partner == me:
+            # 当天最后一只已被配额清掉（partner 自指向）→ 不再把那一位露出来
+            return notices.today_gone_notice(
+                used=int(action.row["draws_used"]),
+                limit=plugin_config.waifu_daily_limit,
+            )
         await _build_and_send(
             bot=bot,
             event=event,
-            partner_id=int(action.row["partner_id"]),
-            headline=await _headline(bot, event, int(action.row["partner_id"])),
+            partner_id=partner,
+            headline=await _headline(bot, event, partner),
             footer="（今日已抽过；要换人发「" + plugin_config.waifu_change_cmd + "」）",
         )
         return None
