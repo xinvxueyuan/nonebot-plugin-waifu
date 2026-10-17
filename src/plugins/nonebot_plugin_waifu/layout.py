@@ -26,6 +26,11 @@
 分不出谁指谁。
 
 所有数值都是**确定性**的（同一输入必得同一坐标）—— 否则测试与实拍对不上。
+
+v0.8.0 追加（**几何一行没改**）：`cluster_specs()` 把「连通分量 → hub → 环规划 →
+扇形角度」抽成 `ClusterSpec`（含槽位坐标），`layout_graph(assignments=...)`
+接受 `{指纹: 按槽位排列的 uid 序列}` 只换「谁坐哪个坑」；
+`assignments=None` 与历史逐像素一致。
 """
 
 from __future__ import annotations
@@ -36,7 +41,7 @@ import math
 from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Iterable, Mapping, Sequence
 
     from .relations import RelationEdge, RelationGraph
 
@@ -143,6 +148,28 @@ class ClusterLayout:
     #: 有向边两端的端口圆（倾心/喜欢各两个；夫妻无向、没有端口）。
     #: 单独一列而不是并进 `lines` —— 它们没有关系名 chip、也不参与「几条关系」的计数。
     ports: tuple[PortMark, ...] = ()
+
+
+@dataclass(frozen=True)
+class ClusterSpec:
+    """一个簇的**槽位骨架**（v0.8.0「槽位重排」用的输入）。
+
+    几何与 `_cluster` 摆出来的**逐点相同**：`slot_xy` 就是今天按环几何算出来的那些
+    坐标（环由内到外、环内按 `_fan_angles` 的角序），只是把「谁坐哪个坑」独立出来，
+    交给 `slots.solve` 去搜（几何一个不动）。
+
+    - `hub`：簇心那位（分量里度数最大者，并列取 uid 小的）。
+    - `members`：簇内全部成员（升序）。
+    - `edges`：簇内**去重无向对**（方向、多重边折叠）——`signature_of` 与求解器都用它。
+    - `slot_xy`：槽位坐标，**长度 == `len(members)`**，首位 = hub 的槽
+      （簇心 `(0, 0)`）；2 人簇是**水平对**（没有环），
+      首位 = hub 今天所在的左边或右边那一头。
+    """
+
+    hub: int
+    members: tuple[int, ...]
+    edges: tuple[tuple[int, int], ...]
+    slot_xy: tuple[tuple[float, float], ...]
 
 
 def _box(cx: float, cy: float, uid: int) -> NodeBox:
@@ -611,19 +638,37 @@ def _normalize(
     )
 
 
+def _pair_sides(hub: int, other: int, edges: Sequence[RelationEdge]) -> tuple[int, int]:
+    """2 人簇水平对的左右：**边的那一端放左边**（有向边读起来与图一致）。
+
+    找不到正好连接这两人的边（理论上不会有）才退回 `hub` 在左。
+    """
+    for e in edges:
+        if {e.src, e.dst} == {hub, other}:
+            return e.src, e.dst
+    return hub, other
+
+
 def _cluster(
-    hub: int, ring: list[int], edges: Iterable[RelationEdge], *, caption: str
+    hub: int,
+    ring: list[int],
+    edges: Iterable[RelationEdge],
+    *,
+    caption: str,
+    order: Sequence[int] | None = None,
 ) -> ClusterLayout:
+    """摆一簇。`order`：环上节点的**落位顺序**（槽位序）—— `None` 就是历史序。
+
+    `order` 只换「谁坐哪个坑」：环半径、每环人数（`_ring_plan`）、环上角度
+    （`_fan_angles`）一概不变，所以槽位坐标与今天**逐像素相同**（v0.8.0 槽位重排）。
+    2 人簇（水平对）由边方向定左右，一个解都没有 —— `order` 在那儿不参与。
+    """
     es = tuple(edges)
     boxes: dict[int, NodeBox] = {}
     if len(ring) == 1:
         # 2 成员（单边）→ 水平对：同 y、中心水平相距 PAIR_SPAN。
         # src 端放左边 —— 有向边的**箭头**（dst 端）读起来与图一致。
-        left, right = hub, ring[0]
-        for e in es:
-            if {e.src, e.dst} == {hub, ring[0]}:
-                left, right = e.src, e.dst
-                break
+        left, right = _pair_sides(hub, ring[0], es)
         boxes[left] = _box(-PAIR_SPAN / 2, 0.0, left)
         boxes[right] = _box(PAIR_SPAN / 2, 0.0, right)
     else:
@@ -634,10 +679,15 @@ def _cluster(
         plan = _ring_plan(len(ring))
         # 单环沿用历史顺序（uid 升序）→ 小簇逐像素不变；分环后按 BFS 排序，
         # 让图里挨着的人落在相邻位置（弦短、跨线少）。
-        order: Sequence[int] = ring if len(plan) == 1 else _bfs_order(hub, ring, es)
+        # 给了 `order`（槽位重排的解）就用它：槽位序列不动，只换「谁坐哪个坑」。
+        seq: Sequence[int] = (
+            order
+            if order is not None
+            else (ring if len(plan) == 1 else _bfs_order(hub, ring, es))
+        )
         start = 0
         for radius, count in plan:
-            uids = order[start : start + count]
+            uids = seq[start : start + count]
             start += count
             for uid, theta in zip(uids, _fan_angles(len(uids)), strict=True):
                 ang = math.radians(theta)
@@ -683,16 +733,23 @@ def _cluster(
     )
 
 
-def layout_graph(
-    graph: RelationGraph, *, focus: int | None = None
-) -> tuple[ClusterLayout, ...]:
-    """`focus` 给了就是单簇 ego 视图；没给就按**连通分量**出多簇（每簇一个中心）。"""
-    if focus is not None:
-        if focus not in graph.nodes:
-            return ()
-        ring = list(graph.neighbours(focus))
-        return (_cluster(focus, ring, graph.edges, caption=""),)
+def _undirected_pairs(edges: Iterable[RelationEdge]) -> tuple[tuple[int, int], ...]:
+    """簇内**去重无向对**（升序）：同对折叠成一条、忽略方向与多重边。
 
+    `ClusterSpec.edges`、`slots.signature_of`、`slots.solve` 共用这一个口径 ——
+    三方各写一套就一定会漂。
+    """
+    return tuple(sorted({(min(e.src, e.dst), max(e.src, e.dst)) for e in edges}))
+
+
+def _component_graphs(
+    graph: RelationGraph,
+) -> tuple[tuple[int, tuple[int, ...], tuple[RelationEdge, ...]], ...]:
+    """`graph` 的连通分量 → `(hub, 成员(升序), 簇内边)`，顺序与历史一致。
+
+    - 分量顺序：**边多的在前**、同量按根 uid（`#1/#2/...` 就是它）。
+    - hub：分量里**度数最大**的人，并列取 uid 小的（今天的规则，一字不改）。
+    """
     parent: dict[int, int] = {}
 
     def find(v: int) -> int:
@@ -710,14 +767,122 @@ def layout_graph(
     comps: dict[int, list[RelationEdge]] = {}
     for e in graph.edges:
         comps.setdefault(find(e.src), []).append(e)
-    out: list[ClusterLayout] = []
     ordered = sorted(comps.items(), key=lambda kv: (-len(kv[1]), kv[0]))
-    for idx, (_root, es) in enumerate(ordered, start=1):
-        members = sorted({m for e in es for m in (e.src, e.dst)})
+    out: list[tuple[int, tuple[int, ...], tuple[RelationEdge, ...]]] = []
+    for _root, es in ordered:
+        members = tuple(sorted({m for e in es for m in (e.src, e.dst)}))
         deg = {u: sum(1 for e in es if u in (e.src, e.dst)) for u in members}
         hub = max(members, key=lambda u: (deg[u], -u))
+        out.append((hub, members, tuple(es)))
+    return tuple(out)
+
+
+def _assigned_ring_order(
+    assignment: Sequence[int] | None, *, hub: int, ring: Sequence[int]
+) -> list[int] | None:
+    """把「按槽位排列的 uid 序列」翻译成 `_cluster` 要的**环上顺序**。
+
+    契约：值 = 该簇**按槽位排列**的 uid 序列（槽位 0 = 簇心）。校验：
+    长度相等、是 `members` 的置换 —— 不过就返回 `None`（该簇静默回退历史序）。
+
+    槽位 0 = 簇心，正常情况解把 hub 放在那儿，取后段即可；万一解把别人放在簇心
+    （`@` 单人视图的 hub 与分量规则的 hub 不是同一个人时会遇到），**保持 hub 坐在
+    簇心**、其余按解的**相对次序**铺开：相对次序（谁挨着谁）才是解的价值所在，
+    而簇心必须是 hub —— 环几何就是这么定的。
+    """
+    if assignment is None:
+        return None
+    got = [int(u) for u in assignment]
+    members = [hub, *ring]
+    if len(got) != len(members) or set(got) != set(members):
+        return None
+    order = [u for u in got if u != hub]
+    return order if len(order) == len(ring) else None
+
+
+def _assigned_order(
+    assignments: Mapping[str, Sequence[int]] | None,
+    *,
+    hub: int,
+    ring: Sequence[int],
+    edges: Iterable[RelationEdge],
+) -> list[int] | None:
+    """按指纹取这一簇的解（没有/对不上 → `None` = 历史序）。
+
+    指纹走 `slots.signature_of`（与 `handle.py` 读缓存用的同一个函数）：
+    两处各算一遍的东西**必须**是同一条式子，否则永远命中不了。
+    """
+    if assignments is None:
+        return None
+    from . import slots  # 延迟导入：`slots` 模块级 import layout，模块级互引会成环
+
+    got = assignments.get(slots.signature_of([hub, *ring], _undirected_pairs(edges)))
+    return _assigned_ring_order(got, hub=hub, ring=ring)
+
+
+def cluster_specs(graph: RelationGraph) -> list[ClusterSpec]:
+    """把「连通分量 → hub → `_ring_plan` 环规划 → `_fan_angles` 扇形角度」抽成 spec。
+
+    与 `layout_graph(graph)`（无 `focus`）**同一套规则、同一个顺序**：
+    第 i 个 spec 就是第 i 个簇（`#1/#2/...`）。`slot_xy` 与 `_cluster` 实际摆节点
+    用的坐标**逐点相同**（同一个 `_box`、同一个 `_fan_angles`），所以
+    「把解按槽位摆回去」= 只换座位、不动几何。
+    """
+    out: list[ClusterSpec] = []
+    for hub, members, es in _component_graphs(graph):
         ring = [u for u in members if u != hub]
-        out.append(_cluster(hub, ring, es, caption=f"#{idx}"))
+        if len(ring) == 1:
+            # 2 人簇 = 水平对（没有环）：槽位就是今天那两个位置，首位仍是 hub 的槽。
+            left, right = _pair_sides(hub, ring[0], es)
+            boxes = {
+                left: _box(-PAIR_SPAN / 2, 0.0, left),
+                right: _box(PAIR_SPAN / 2, 0.0, right),
+            }
+            slot_xy = tuple((boxes[u].cx, boxes[u].cy) for u in (hub, ring[0]))
+        else:
+            slots: list[tuple[float, float]] = [(0.0, 0.0)]  # 槽位 0 = 簇心（hub）
+            for radius, count in _ring_plan(len(ring)):
+                for theta in _fan_angles(count):
+                    ang = math.radians(theta)
+                    slots.append((radius * math.cos(ang), radius * math.sin(ang)))
+            slot_xy = tuple(slots)
+        out.append(
+            ClusterSpec(
+                hub=hub,
+                members=members,
+                edges=_undirected_pairs(es),
+                slot_xy=slot_xy,
+            )
+        )
+    return out
+
+
+def layout_graph(
+    graph: RelationGraph,
+    *,
+    focus: int | None = None,
+    assignments: Mapping[str, Sequence[int]] | None = None,
+) -> tuple[ClusterLayout, ...]:
+    """`focus` 给了就是单簇 ego 视图；没给就按**连通分量**出多簇（每簇一个中心）。
+
+    `assignments`（v0.8.0）：`{指纹: 按槽位排列的 uid 序列}`，指纹由
+    `slots.signature_of(spec.members, spec.edges)` 算。给了就按解摆位 ——
+    **槽位坐标一个不动，只换「谁坐哪个坑」**；键缺失 / 长度不符 / 不是成员的置换
+    → 该簇**静默回退历史序**（出图绝不能因为缓存坏掉而失败）。
+    `None`（默认）= 今天的行为，逐像素一致。
+    """
+    if focus is not None:
+        if focus not in graph.nodes:
+            return ()
+        ring = list(graph.neighbours(focus))
+        order = _assigned_order(assignments, hub=focus, ring=ring, edges=graph.edges)
+        return (_cluster(focus, ring, graph.edges, caption="", order=order),)
+
+    out: list[ClusterLayout] = []
+    for idx, (hub, members, es) in enumerate(_component_graphs(graph), start=1):
+        ring = [u for u in members if u != hub]
+        order = _assigned_order(assignments, hub=hub, ring=ring, edges=es)
+        out.append(_cluster(hub, ring, es, caption=f"#{idx}", order=order))
     return tuple(out)
 
 

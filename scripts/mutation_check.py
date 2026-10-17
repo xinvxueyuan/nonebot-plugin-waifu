@@ -29,6 +29,9 @@ LAYOUT = ROOT / "src/plugins/nonebot_plugin_waifu/layout.py"
 #: 原先落在 `render._node_html` / `_LABEL_TEMPLATE`（已随 div 绘制退役），
 #: 现在钉到等价的**新点位**（同一风险、同一行为）。
 GRAPH = ROOT / "src/plugins/nonebot_plugin_waifu/graph_g6.py"
+#: 2026-10-17（v0.8.0）：关系图**落点求解器本体**（`slots.py`，新文件）。
+#: 审查 6(f)：735 行的核心算法一条变异体都没有 —— 这批补齐（MN51~MN54）。
+SLOTS = ROOT / "src/plugins/nonebot_plugin_waifu/slots.py"
 
 # ⚠️ 不要加 `--no-cov`（本仓未装 pytest-cov，会报 unrecognized arguments）
 TESTS = ["tests/", "-q", "-p", "no:cacheprovider", "-x"]
@@ -568,6 +571,91 @@ MUTATIONS = [
         HANDLE,
         "    if targets and len(missing_ids) == len(targets):",
         "    if False:  # 变异：全都没关系也硬画",
+    ),
+    (
+        "MN45 落点开关被忽略（WAIFU_LAYOUT_SOLVE=false 也照解）",
+        HANDLE,
+        "    if not plugin_config.waifu_layout_solve:",
+        "    if False:  # 变异：忽略落点开关",
+    ),
+    (
+        "MN46 缓存永远当没有（同一张图每次都重解，90s 白花）",
+        HANDLE,
+        "            cached = store.get_layout_solution(group_id=gid, sig=sig)",
+        "            cached = None  # 变异：缓存失效",
+    ),
+    (
+        "MN47 缓存键不含边（成员没变、关系变了仍用旧解画新图）",
+        HANDLE,
+        "            sig = slots.signature_of(spec.members, spec.edges)",
+        "            sig = slots.signature_of(spec.members, ())  # 变异：指纹不看边",
+    ),
+    (
+        "MN48 求解结果不落库（每次都重解、缓存与精修全白干）",
+        HANDLE,
+        "            store.save_layout_solution(\n"
+        "                group_id=gid,\n"
+        "                sig=sig,\n"
+        "                uids=uids,\n"
+        "                cost=_COST_UNKNOWN,\n"
+        "                budget_s=plugin_config.waifu_layout_solve_budget,\n"
+        "            )",
+        "            pass  # 变异：求解结果不落库",
+    ),
+    (
+        "MN49 solve 改回事件循环内同步调用（8~90s 冻住整个 bot）",
+        HANDLE,
+        "            uids = await asyncio.to_thread(\n"
+        "                slots.solve,\n"
+        "                spec.slot_xy,",
+        "            uids = slots.solve(  # 变异：同步阻塞事件循环\n"
+        "                spec.slot_xy,",
+    ),
+    (
+        "MN50 求解失败把异常抛出去（关系图命令随之失败）",
+        HANDLE,
+        "        except Exception:\n"
+        "            # 单簇失败只影响这一簇（它退回历史序），其余簇照用\n"
+        '            logger.warning("关系图落点求解失败，该簇退回历史序",'
+        " exc_info=True)",
+        "        except Exception:\n            raise  # 变异：求解失败就让命令失败",
+    ),
+    # ------------------------------------------------------------------ #
+    # 2026-10-17（四）：v0.8.0 落点求解器本体（`slots.py`）。
+    # 审查 6.2/6(f)：新写的 735 行核心算法 0 条变异体 —— 这批补齐
+    # （压头像权重 / 预算 0 兜底 / 密单环弃搜 / 指纹成员位）。
+    # ------------------------------------------------------------------ #
+    (
+        "MN51 「压头像圆」不再计成本（弦又敢贴着别人的头像画）",
+        SLOTS,
+        "W_CIRCLE_FLAG: Final[float] = 6000.0  # 每条「边贴到别人头像圆」的边",
+        "W_CIRCLE_FLAG: Final[float] = 0.0  # 变异：压头像圆不再计成本",
+    ),
+    (
+        "MN52 预算 0 不再直接交历史序（防倒退的兜底被绕开）",
+        SLOTS,
+        "    if budget_s <= 0.0:\n        return _history_slots(hub, base, out_len)",
+        "    if False:  # 变异：预算 0 也照搜（不再直接交历史序）\n"
+        "        return _history_slots(hub, base, out_len)",
+    ),
+    (
+        "MN53 密单环又弃搜（槽位轴间距 < gap_min 时原样交还历史序）",
+        SLOTS,
+        "    search = _SlotSearch(\n"
+        "        hub=hub, ring=ring, pairs=edges, slots=ring_slots, gap_min=gap_min\n"
+        "    )\n",
+        "    search = _SlotSearch(\n"
+        "        hub=hub, ring=ring, pairs=edges, slots=ring_slots, gap_min=gap_min\n"
+        "    )\n"
+        "    if search.min_gap < gap_min:  # 变异：密单环又弃搜\n"
+        "        return _history_slots(hub, base, out_len)\n",
+    ),
+    (
+        "MN54 图指纹漏掉成员（不同成员的图会互相命中对方的解）",
+        SLOTS,
+        '    uid_part = ",".join(str(int(u)) for u in'
+        " sorted({int(m) for m in members}))",
+        '    uid_part = ""  # 变异：指纹不看成员',
     ),
 ]
 

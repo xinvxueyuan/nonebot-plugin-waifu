@@ -40,6 +40,19 @@ DEFAULT_GRAPH_CMD: Final[str] = "老婆关系图"
 #: 旧默认 20 会把全群图截掉 —— 想看全图不该还要自己配）。
 DEFAULT_GRAPH_MAX_EDGES: Final[int] = 60
 
+#: 「槽位重排」（v0.8.0）开关的默认值：出图前解一次「谁坐哪个坑」。
+#: 关掉 = 完全回到历史落点序（逐像素一致），出图不再等任何求解。
+DEFAULT_LAYOUT_SOLVE: Final[bool] = True
+
+#: 首次求解的**秒预算**（默认 8s）：缓存未命中时先解一版够用的，出图不等满预算。
+DEFAULT_LAYOUT_SOLVE_BUDGET: Final[float] = 8.0
+
+#: 后台**精修**的秒预算（默认 90s）：首次出图后异步重解，覆盖缓存（下次出图用上）。
+DEFAULT_LAYOUT_REFINE_BUDGET: Final[float] = 90.0
+
+#: 求解器的随机种子（默认 20261017）：同种子 + 同参数 → **同一个解**（可复现）。
+DEFAULT_LAYOUT_SEED: Final[int] = 20261017
+
 #: 取向三档的中文写法 → 规范值
 #: （用户用中文表达这三档，`.env` 里写中文不该让插件起不来）。
 _ORIENTATION_ALIASES: Final[dict[str, str]] = {
@@ -99,6 +112,32 @@ class Config(BaseModel):
         ge=1,
         le=60,
         description="关系图最多画几条关系边，默认 60",
+    )
+    waifu_layout_solve: bool = Field(
+        default=DEFAULT_LAYOUT_SOLVE,
+        description=(
+            "关系图是否做「槽位重排」（固定环几何、只搜谁坐哪个坑）："
+            "关掉 = 历史落点序（逐像素一致）"
+        ),
+    )
+    waifu_layout_solve_budget: float = Field(
+        default=DEFAULT_LAYOUT_SOLVE_BUDGET,
+        ge=0.0,
+        le=600.0,
+        description="首次槽位求解的秒预算，默认 8（0 = 不做搜索，直接用历史序）",
+    )
+    waifu_layout_refine_budget: float = Field(
+        default=DEFAULT_LAYOUT_REFINE_BUDGET,
+        ge=0.0,
+        le=3600.0,
+        description=(
+            "后台精修槽位解的秒预算，默认 90（首次出图不等它，跑完覆盖缓存；"
+            "只允许高于缓存里那条解的预算才覆盖；0 = 不派精修）"
+        ),
+    )
+    waifu_layout_seed: int = Field(
+        default=DEFAULT_LAYOUT_SEED,
+        description="槽位求解器的随机种子，默认 20261017（同种子同参数 → 同一个解）",
     )
 
     waifu_max_partners: int = Field(
@@ -198,6 +237,10 @@ __all__ = [
     "DEFAULT_GRAPH_CMD",
     "DEFAULT_GRAPH_MAX_EDGES",
     "DEFAULT_HEADLINE_TEMPLATE",
+    "DEFAULT_LAYOUT_REFINE_BUDGET",
+    "DEFAULT_LAYOUT_SEED",
+    "DEFAULT_LAYOUT_SOLVE",
+    "DEFAULT_LAYOUT_SOLVE_BUDGET",
     "DEFAULT_MEMBER_TTL_DAYS",
     "Config",
     "plugin_config",

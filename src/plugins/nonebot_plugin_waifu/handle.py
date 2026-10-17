@@ -48,12 +48,13 @@ from . import (
     render,
     robot_filter,
     rules,
+    slots,
     store,
 )
 from .config import DEFAULT_HEADLINE_TEMPLATE, plugin_config
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Sequence
     import sqlite3
 
 logger = logging.getLogger("nonebot_plugin_waifu")
@@ -970,6 +971,164 @@ async def _h_divorce(
 # `no_relations_notice()` 编译成回执卡（Task 8A），纯文本只在渲染不可用时兜底。
 
 
+# --------------------------------------------------------------------------- #
+# 关系图落点（2026-10-17，v0.8.0）：**槽位重排 + 缓存 + 后台精修**
+#
+# 为什么：A–B–C 近似共线时，A–C 的连线必然贴着/压着 B —— 这是「节点摆在哪儿」
+# 造成的缺陷，靠画线修不了（用户 2026-10-17 口径）。所以出图前先解一次
+# 「谁占哪个槽位」（`slots.solve`），把解按 `(群, 图指纹)` 缓存：
+#
+#   读缓存命中 → 直接用；未命中 → **短预算**求解（默认 8s）→ 落库 → 用 → 派后台精修
+#   后台精修    → **满预算**重解（默认 90s）→ 覆盖落库（下次出图直接用）
+#
+# 三条铁律：
+# 1. **任何一步失败都退回 `assignments=None`**（= 今天的历史落点序）——
+#    求解失败只是图差一点，「老婆关系图」这条命令绝不允许因此失败；
+# 2. **所有 `solve` 都走 `asyncio.to_thread`**：bot 是单事件循环，8~90s 的同步计算
+#    会把整个 bot 冻住（所有群、所有命令一起卡死）；
+# 3. 精修**按 `(群, 指纹)` 单飞**：同一张图连着发几次，后台只跑一个求解。
+# --------------------------------------------------------------------------- #
+
+#: 后台精修任务的登记表：`(群, 图指纹) → task`（跑完自己摘掉）。单飞的依据。
+_refine_tasks: dict[tuple[int, str], asyncio.Task[None]] = {}
+
+#: `cost` 列当前**没有来源**：契约里的 `slots.solve` 只回 uid 序列（不报成本），
+#: 所以先写这个哨兵占位；列留给后续接入成本读数，免得以后又要改表。
+_COST_UNKNOWN: Final[float] = -1.0
+
+
+def _uids_fit(uids: Sequence[int], members: Sequence[int]) -> bool:
+    """这串 uid 是不是 `members` 的**合法置换**（长度相等、不重不漏）。
+
+    缓存行被写坏 / 求解器返回怪东西时，拿它去画图会**丢节点或画重复人** ——
+    宁可当场退回历史序（`assignments=None`）。
+    """
+    return len(uids) == len(members) and set(uids) == set(members)
+
+
+async def _graph_layout_assignments(
+    view: relations.RelationGraph, gid: int
+) -> dict[str, tuple[int, ...]] | None:
+    """出图前的落点：逐簇读缓存 → 未命中就**短预算求解**（线程里跑）→ 落库。
+
+    返回 `layout.layout_graph(assignments=...)` 用的映射
+    （键 = `slots.signature_of(spec.members, spec.edges)`，值 = 槽位序 uid）。
+    没有一簇拿到解（或开关关掉 / 出错）→ `None`（= 历史落点序，逐像素一致）。
+    """
+    if not plugin_config.waifu_layout_solve:
+        return None  # 开关关掉 = 今天的行为
+    if float(plugin_config.waifu_layout_solve_budget) <= 0.0:
+        # 预算 0 = **完全不搜**：不调 `slots.solve`、不派精修、直接给历史落点序
+        # （README/config 的「0 = 不搜索、直接用历史序」必须逐字成立 —— 审查 §5.3 实测旧
+        # 行为仍会派 90s 精修，下一次出图用的就是排过序的解）。
+        return None
+    try:
+        specs = layout.cluster_specs(view)
+    except Exception:
+        logger.warning("关系图簇规划失败，本次退回历史落点序", exc_info=True)
+        return None
+    out: dict[str, tuple[int, ...]] = {}
+    fresh: list[tuple[str, layout.ClusterSpec]] = []
+    for spec in specs:
+        try:
+            sig = slots.signature_of(spec.members, spec.edges)
+            cached = store.get_layout_solution(group_id=gid, sig=sig)
+            if cached is not None and _uids_fit(cached, spec.members):
+                out[sig] = cached  # 命中：同一张图每次都摆得一样
+                continue
+            uids = await asyncio.to_thread(
+                slots.solve,
+                spec.slot_xy,
+                members=spec.members,
+                hub=spec.hub,
+                edges=spec.edges,
+                budget_s=plugin_config.waifu_layout_solve_budget,
+                seed=plugin_config.waifu_layout_seed,
+            )
+            if not _uids_fit(uids, spec.members):
+                logger.warning("落点解不是成员的置换（sig=%s），该簇用历史序", sig)
+                continue
+            store.save_layout_solution(
+                group_id=gid,
+                sig=sig,
+                uids=uids,
+                cost=_COST_UNKNOWN,
+                budget_s=plugin_config.waifu_layout_solve_budget,
+            )
+            out[sig] = uids
+            fresh.append((sig, spec))
+        except Exception:
+            # 单簇失败只影响这一簇（它退回历史序），其余簇照用
+            logger.warning("关系图落点求解失败，该簇退回历史序", exc_info=True)
+    for sig, spec in fresh:
+        _spawn_layout_refine(gid, sig, spec)
+    return out or None
+
+
+def _spawn_layout_refine(gid: int, sig: str, spec: layout.ClusterSpec) -> None:
+    """派一个**后台精修**：满预算重解并按 `(群, 指纹)` 覆盖落库。
+
+    - 单飞：同一 `(群, 指纹)` 已有任务在跑就不重复派（同一张图连发多次不叠任务）；
+    - 只是**更快地变好**（下次出图直接用精修解），本次出图不等它；
+    - `WAIFU_LAYOUT_REFINE_BUDGET <= 0` → **不派**：0 预算的「精修」只会返回历史序，
+      派出去等于拿历史序覆盖已有的好解（审查 §5.3 实测过的坑）。
+    """
+    if float(plugin_config.waifu_layout_refine_budget) <= 0.0:
+        return
+    key = (gid, sig)
+    running = _refine_tasks.get(key)
+    if running is not None and not running.done():
+        return
+    task = asyncio.create_task(_layout_refine(gid, sig, spec))
+    _refine_tasks[key] = task
+    task.add_done_callback(lambda _t, k=key: _refine_tasks.pop(k, None))
+
+
+async def _layout_refine(gid: int, sig: str, spec: layout.ClusterSpec) -> None:
+    """后台精修：满预算重解一次，成功就**覆盖落库**（下次出图用上）。
+
+    只允许**更强预算**的解覆盖：`精修预算 > 缓存里那条解的预算（budget_s 列）`——
+    否则放弃（弱预算的解不许把强解换掉，审查 §5.3 的守卫）。
+    失败/超时**只记日志**：精修是「锦上添花」，短预算那一版已经在库里了，
+    绝不能让它把异常带到事件循环外面（`asyncio` 只会把它记成
+    「Task exception was never retrieved」）。
+    """
+    budget_s = float(plugin_config.waifu_layout_refine_budget)
+    if budget_s <= 0.0:
+        return
+    cached_budget = store.get_layout_solution_budget(group_id=gid, sig=sig)
+    if cached_budget is not None and budget_s <= cached_budget:
+        logger.info(
+            "精修预算(%ss)不高于缓存里那条解(%ss)，跳过（sig=%s）",
+            budget_s,
+            cached_budget,
+            sig,
+        )
+        return
+    try:
+        uids = await asyncio.to_thread(
+            slots.solve,
+            spec.slot_xy,
+            members=spec.members,
+            hub=spec.hub,
+            edges=spec.edges,
+            budget_s=budget_s,
+            seed=plugin_config.waifu_layout_seed,
+        )
+        if not _uids_fit(uids, spec.members):
+            logger.warning("精修解不是成员的置换（sig=%s），保留现有解", sig)
+            return
+        store.save_layout_solution(
+            group_id=gid,
+            sig=sig,
+            uids=uids,
+            cost=_COST_UNKNOWN,
+            budget_s=budget_s,
+        )
+    except Exception:
+        logger.warning("关系图落点精修失败（保留现有解）", exc_info=True)
+
+
 @graph_cmd.handle()
 async def _h_graph(
     bot: Bot, event: GroupMessageEvent, args: Message = CommandArg()
@@ -1015,8 +1174,12 @@ async def _h_graph(
         (nicknames.get(t) or "").strip() or str(t) for t in missing_ids
     )
     # 单人走「焦点簇」布局；多人合并图按连通分量出簇（`focus` 只影响副标题）
+    # 落点（v0.8.0）：先读缓存/短预算求解拿 `assignments`；拿不到就是历史落点序。
+    assignments = await _graph_layout_assignments(view, gid)
     clusters = layout.layout_graph(
-        view, focus=focus if isinstance(focus, int) else None
+        view,
+        focus=focus if isinstance(focus, int) else None,
+        assignments=assignments,
     )
     avatars = await render.fetch_avatars(layout.node_ids(clusters))
     png = await render.render_graph(

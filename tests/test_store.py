@@ -518,3 +518,124 @@ def test_clear_drawn_partner_keeps_the_drawn_exclusion_set(tmp_store):
     store.clear_drawn_partner(group_id=100, user_id=1, date_key="2026-10-17")
 
     assert store.drawn_partners(100, 1, "2026-10-17") == {2}
+
+
+# --------------------------------------------------------------------------- #
+# 关系图落点解缓存（v0.8.0）：`waifu_layout_solution`
+# --------------------------------------------------------------------------- #
+def test_layout_solution_table_has_the_frozen_columns(tmp_store):
+    """表与列名是**契约**（`store.get_layout_solution` 的读写两端都按它来）。"""
+    conn = sqlite3.connect(tmp_store)
+    cols = {
+        r[1]: r[2]
+        for r in conn.execute("PRAGMA table_info(waifu_layout_solution)").fetchall()
+    }
+    pk = [
+        r[1]
+        for r in sorted(
+            conn.execute("PRAGMA table_info(waifu_layout_solution)").fetchall(),
+            key=lambda r: r[5],
+        )
+        if r[5]
+    ]
+    conn.close()
+    assert cols == {
+        "group_id": "INTEGER",
+        "sig": "TEXT",
+        "uids": "TEXT",
+        "cost": "REAL",
+        "budget_s": "REAL",
+        "updated_at": "REAL",
+    }
+    assert pk == ["group_id", "sig"], "主键必须是 (group_id, sig)"
+
+
+def test_layout_solution_roundtrip_keeps_slot_order(tmp_store):
+    """存进去的 uid 序列**按槽位顺序**读回来（顺序即解本身，不许被排序）。"""
+    from nonebot_plugin_waifu import store
+
+    assert store.get_layout_solution(group_id=100, sig="nope") is None
+    store.save_layout_solution(
+        group_id=100, sig="abc123", uids=(30003, 10001, 20002), cost=1.5, budget_s=8.0
+    )
+    assert store.get_layout_solution(group_id=100, sig="abc123") == (
+        30003,
+        10001,
+        20002,
+    )
+
+
+def test_save_layout_solution_upserts_over_the_old_solution(tmp_store):
+    """UPSERT：后台精修完成后就是靠这次覆盖把满预算的新解换上去。"""
+    from nonebot_plugin_waifu import store
+
+    store.save_layout_solution(
+        group_id=100, sig="abc123", uids=(1, 2, 3), cost=-1.0, budget_s=8.0
+    )
+    store.save_layout_solution(
+        group_id=100, sig="abc123", uids=(3, 1, 2), cost=-1.0, budget_s=90.0
+    )
+    assert store.get_layout_solution(group_id=100, sig="abc123") == (3, 1, 2)
+
+    conn = sqlite3.connect(tmp_store)
+    n = conn.execute(
+        "SELECT COUNT(*) FROM waifu_layout_solution WHERE group_id = 100"
+        " AND sig = 'abc123'"
+    ).fetchone()[0]
+    budget = conn.execute(
+        "SELECT budget_s FROM waifu_layout_solution WHERE group_id = 100"
+        " AND sig = 'abc123'"
+    ).fetchone()[0]
+    conn.close()
+    assert n == 1, "覆盖写不该留两行（主键是 (group_id, sig)）"
+    assert float(budget) == 90.0
+
+
+def test_layout_solution_is_scoped_to_group_and_sig(tmp_store):
+    """键 = `(群, 图指纹)`：换群、换指纹都读不到（关系一变指纹就变 → 旧解自然失效）。"""
+    from nonebot_plugin_waifu import store
+
+    store.save_layout_solution(
+        group_id=100, sig="sig-a", uids=(1, 2), cost=-1.0, budget_s=8.0
+    )
+    assert store.get_layout_solution(group_id=200, sig="sig-a") is None
+    assert store.get_layout_solution(group_id=100, sig="sig-b") is None
+    assert store.get_layout_solution(group_id=100, sig="sig-a") == (1, 2)
+
+
+def test_layout_solution_reads_broken_rows_as_no_cache(tmp_store):
+    """坏行（空串 / 非数字）当成**没有**：宁可重新求解，也不能让出图命令抛出去。"""
+    from nonebot_plugin_waifu import store
+
+    conn = sqlite3.connect(tmp_store)
+    conn.execute(
+        "INSERT INTO waifu_layout_solution"
+        " (group_id, sig, uids, cost, budget_s, updated_at)"
+        " VALUES (100, 'bad1', '', 0.0, 8.0, 0.0),"
+        "        (100, 'bad2', '1,,2', 0.0, 8.0, 0.0),"
+        "        (100, 'bad3', '1,两个,2', 0.0, 8.0, 0.0)"
+    )
+    conn.commit()
+    conn.close()
+
+    assert store.get_layout_solution(group_id=100, sig="bad1") is None
+    assert store.get_layout_solution(group_id=100, sig="bad2") is None
+    assert store.get_layout_solution(group_id=100, sig="bad3") is None
+
+
+def test_save_layout_solution_never_writes_an_empty_sequence(tmp_store):
+    """空 uids 不写：写进去下次读回空序列，等于给这一簇下毒（画的图会丢人）。"""
+    from nonebot_plugin_waifu import store
+
+    store.save_layout_solution(
+        group_id=100, sig="sig-a", uids=(1, 2), cost=-1.0, budget_s=8.0
+    )
+    store.save_layout_solution(
+        group_id=100, sig="sig-a", uids=(), cost=-1.0, budget_s=90.0
+    )
+    store.save_layout_solution(
+        group_id=100, sig="sig-new", uids=(), cost=-1.0, budget_s=90.0
+    )
+
+    assert store.get_layout_solution(group_id=100, sig="sig-a") == (1, 2)
+    assert store.get_layout_solution(group_id=100, sig="sig-new") is None

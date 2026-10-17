@@ -546,3 +546,233 @@ def test_big_cluster_labels_still_glue_to_their_own_lines():
             for line in cluster.lines:
                 d = _perp_dist(_chip_center(line, lay), line)
                 assert d <= 2, f"{n} 人簇的 {line.src}->{line.dst} 标签离线 {d:.1f}px"
+
+
+# --------------------------------------------------------------------------- #
+# v0.8.0「槽位重排」：`cluster_specs()` + `layout_graph(assignments=...)`
+#
+# 几何**一个不动**：槽位坐标与今天 `_cluster` 摆节点用的逐点相同，解只决定
+# 「谁坐哪个坑」。所以这里钉三件事：① spec 的槽位就是今天的落点；
+# ② `assignments=None` 与历史**逐像素一致**（既有断言一个都不许改）；
+# ③ 给了 assignments 就真的按槽位摆（且坏值静默回退历史序）。
+# --------------------------------------------------------------------------- #
+def _slots():
+    from nonebot_plugin_waifu import slots
+
+    return slots
+
+
+def _specs_and_assignments(graph, *, budget: float = 0.0):
+    """按 `handle.py` 的接线取 `assignments`：逐簇 `signature_of` + `solve`。"""
+    lay, slots = _l(), _slots()
+    out = {}
+    specs = lay.cluster_specs(graph)
+    for spec in specs:
+        out[slots.signature_of(spec.members, spec.edges)] = slots.solve(
+            spec.slot_xy,
+            members=spec.members,
+            hub=spec.hub,
+            edges=spec.edges,
+            budget_s=budget,
+            seed=20261017,
+        )
+    return specs, out
+
+
+def _shapes():
+    """覆盖：水平对 / 小扇形 / 分环大簇 / 多分量 / 同对双有向边 / 生产同形（38 人）。"""
+    return (
+        _mk((1, 2, "m")),
+        _mk((1, 2, "m"), (3, 1, "c"), (4, 1, "c")),
+        _mk((1, 2, "m"), (1, 3, "m"), (1, 4, "m"), (1, 5, "m"), (1, 6, "m")),
+        _mk((1, 2, "m"), (2, 3, "m"), (4, 5, "m")),
+        _dg((1, 2, "crush"), (2, 1, "like"), (5, 6, "like")),
+        _star(12),
+        _star(28),
+        _star(38),  # 生产大簇同形（37 个环上节点 → 3 环）
+    )
+
+
+def test_cluster_specs_slots_are_exactly_the_positions_used_today():
+    """`cluster_specs()` 的槽位坐标 = 今天 `_cluster` 实际用于摆节点的坐标。
+
+    三份证据：
+    ① 结构：长度 == 成员数、首位 = hub 的槽（环簇是 `(0, 0)` 的簇心）；
+    ② 环簇的槽位半径与人数与 `_ring_plan` 逐个相同（环由内到外、环内按角序）；
+    ③ **最强的一条**：拿「历史序」当解交回去（`budget_s=0`），摆出来的盒子与
+       `layout_graph(g)`（不给解）**逐点相同** —— 坐标错一个像素都会红。
+    """
+    lay = _l()
+    for g in _shapes():
+        specs, assigns = _specs_and_assignments(g)
+        assert specs, "空图不该出现在这里"
+        for spec in specs:
+            assert len(spec.slot_xy) == len(spec.members)
+            assert spec.members == tuple(sorted(spec.members))
+            assert spec.edges == tuple(sorted(set(spec.edges)))
+            ring = [u for u in spec.members if u != spec.hub]
+            if len(ring) > 1:
+                assert spec.slot_xy[0] == (0.0, 0.0), "环簇的槽位 0 必须是簇心"
+                plan = lay._ring_plan(len(ring))
+                radii = [round(math.hypot(x, y)) for x, y in spec.slot_xy[1:]]
+                want = [round(r) for r, c in plan for _ in range(c)]
+                assert radii == want, f"槽位半径与 _ring_plan 不一致：{radii} != {want}"
+            else:
+                assert {round(x) for x, _y in spec.slot_xy} == {
+                    -lay.PAIR_SPAN // 2,
+                    lay.PAIR_SPAN // 2,
+                }, "2 人簇的槽位必须是水平对的那两个位置"
+        historical = lay.layout_graph(g)
+        assert lay.layout_graph(g, assignments=assigns) == historical
+
+
+def test_layout_graph_without_assignments_is_pixel_identical_to_yesterday():
+    """缺省（`None` / 空表 / 无关键）与今天**逐像素一致** —— focus 视图也一样。
+
+    `assignments=None` 是「开关关掉」与「任何一步失败」的兜底路径：它必须**完全**
+    等于历史行为（既有断言一个都没改，靠的就是这条）。
+    """
+    lay = _l()
+    for g in _shapes():
+        base = lay.layout_graph(g)
+        assert lay.layout_graph(g, assignments=None) == base
+        assert lay.layout_graph(g, assignments={}) == base
+        assert lay.layout_graph(g, assignments={"deadbeefdeadbeef": (1, 2, 3)}) == base
+    g = _mk((1, 2, "m"), (3, 1, "c"), (4, 1, "c"))
+    focus = lay.layout_graph(g.ego(1), focus=1)
+    assert lay.layout_graph(g.ego(1), focus=1, assignments=None) == focus
+    assert lay.layout_graph(g.ego(1), focus=1, assignments={}) == focus
+
+
+def test_layout_graph_puts_each_uid_on_its_own_slot():
+    """给了 assignments 就**按槽位摆**。
+
+    每个 uid 落在自己那个槽上（相对 hub），槽位位置的多重集不变
+    （= 只换座位、不动几何）。
+    """
+    lay, slots = _l(), _slots()
+    g = _mk(
+        (1, 2, "m"),
+        (1, 3, "c"),
+        (1, 4, "c"),
+        (1, 5, "c"),
+        (1, 6, "c"),
+        (1, 7, "c"),
+        (1, 8, "c"),
+    )
+    spec = lay.cluster_specs(g)[0]
+    base = _slots().solve(
+        spec.slot_xy,
+        members=spec.members,
+        hub=spec.hub,
+        edges=spec.edges,
+        budget_s=0.0,
+        seed=1,
+    )
+    rotated = (base[0], *base[2:], base[1])  # 环上轮转一位（hub 仍在簇心）
+    (cluster,) = lay.layout_graph(
+        g, assignments={slots.signature_of(spec.members, spec.edges): rotated}
+    )
+    by_uid = {n.uid: n for n in cluster.nodes}
+    hub_c = (by_uid[spec.hub].cx, by_uid[spec.hub].cy)
+    for k, uid in enumerate(rotated):
+        dx = spec.slot_xy[k][0] - spec.slot_xy[0][0]
+        dy = spec.slot_xy[k][1] - spec.slot_xy[0][1]
+        assert abs((by_uid[uid].cx - hub_c[0]) - dx) <= 0.51, f"uid={uid} 不在槽 {k} 上"
+        assert abs((by_uid[uid].cy - hub_c[1]) - dy) <= 0.51, f"uid={uid} 不在槽 {k} 上"
+    # 位置集合不变：还是那些槽位
+    was = {(n.cx, n.cy) for n in lay.layout_graph(g)[0].nodes}
+    now = {(n.cx, n.cy) for n in cluster.nodes}
+    assert was == now, "换座位不该挪动任何一个槽位"
+
+
+def test_layout_graph_falls_back_when_the_assignment_is_unusable():
+    """键缺失 / 长度不符 / 不是置换 → 该簇**静默回退历史序**（出图绝不因此失败）。"""
+    lay, slots = _l(), _slots()
+    g = _mk((1, 2, "m"), (1, 3, "c"), (1, 4, "c"), (1, 5, "c"))
+    spec = lay.cluster_specs(g)[0]
+    sig = slots.signature_of(spec.members, spec.edges)
+    base = lay.layout_graph(g)
+    good = slots.solve(
+        spec.slot_xy,
+        members=spec.members,
+        hub=spec.hub,
+        edges=spec.edges,
+        budget_s=0.0,
+        seed=1,
+    )
+    assert lay.layout_graph(g, assignments={sig: good}) == base  # 历史序 = 恒等
+    assert lay.layout_graph(g, assignments={sig: good[:-1]}) == base  # 长度不符
+    assert lay.layout_graph(g, assignments={sig: [1] * len(good)}) == base  # 不是置换
+    assert lay.layout_graph(g, assignments={sig: [*good[:-1], 999999]}) == base
+
+
+def test_two_member_cluster_stays_a_horizontal_pair_whatever_the_assignment():
+    """2 人簇是**水平对**：只有「边的那一端在左」这一个解 —— 解给什么都照样摆。
+
+    （`slot_xy` 的第一位仍是 hub 的槽，只是那儿没有第二个自由度；`_cluster` 的
+    2 人分支压根不看 `order`，所以坏缓存也镜像不了这一簇。）
+    """
+    lay, slots = _l(), _slots()
+    g = _mk((1, 2, "m"))
+    spec = lay.cluster_specs(g)[0]
+    assert len(spec.members) == 2 and len(spec.slot_xy) == 2
+    sig = slots.signature_of(spec.members, spec.edges)
+    base = lay.layout_graph(g)
+    (cluster,) = base
+    a, b = cluster.nodes
+    assert a.y == b.y and abs(abs(a.cx - b.cx) - lay.PAIR_SPAN) <= 2
+    for swapped in ((spec.members[1], spec.members[0]), (spec.hub, spec.members[0])):
+        assert lay.layout_graph(g, assignments={sig: swapped}) == base
+
+
+def test_cluster_specs_order_matches_layout_graph_clusters():
+    """第 i 个 spec 就是第 i 个簇（hub 与成员集合一致）。
+
+    `handle.py` 的接线（逐 spec 求解 → 按指纹交给 `layout_graph`）靠这条对齐。
+    """
+    lay = _l()
+    for g in _shapes():
+        clusters = lay.layout_graph(g)
+        specs = lay.cluster_specs(g)
+        assert len(specs) == len(clusters)
+        for cluster, spec in zip(clusters, specs, strict=True):
+            assert cluster.hub == spec.hub
+            assert tuple(sorted(n.uid for n in cluster.nodes)) == spec.members
+
+
+def test_focus_view_takes_assignments_too():
+    """`@某人` 的单人视图（`focus=`）也吃 assignments。
+
+    单人视图走的是**焦点簇**（hub = 被 @ 的人），不是分量规则；`cluster_specs`
+    对 ego 图算出来的 hub 恰好同一个人（ego 里所有边都连着他，度数最大），
+    所以指纹对得上、解能生效 —— 这条把「@ 单人也要走槽位重排」钉住。
+    """
+    lay, slots = _l(), _slots()
+    g = _mk(
+        (1, 2, "m"), (1, 3, "c"), (1, 4, "c"), (1, 5, "c"), (1, 6, "c"), (1, 7, "c")
+    )
+    ego = g.ego(1)
+    (spec,) = lay.cluster_specs(ego)
+    assert spec.hub == 1
+    base = slots.solve(
+        spec.slot_xy,
+        members=spec.members,
+        hub=spec.hub,
+        edges=spec.edges,
+        budget_s=0.0,
+        seed=1,
+    )
+    rotated = (base[0], *base[2:], base[1])
+    before = lay.layout_graph(ego, focus=1)
+    after = lay.layout_graph(
+        ego,
+        focus=1,
+        assignments={slots.signature_of(spec.members, spec.edges): rotated},
+    )
+    assert before != after, "焦点视图没吃下 assignments"
+    by_uid = {n.uid: n for n in after[0].nodes}
+    hub_c = (by_uid[spec.hub].cx, by_uid[spec.hub].cy)
+    for k, uid in enumerate(rotated):
+        assert abs((by_uid[uid].cx - hub_c[0]) - spec.slot_xy[k][0]) <= 0.51
+        assert abs((by_uid[uid].cy - hub_c[1]) - spec.slot_xy[k][1]) <= 0.51

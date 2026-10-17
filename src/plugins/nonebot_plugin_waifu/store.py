@@ -2,7 +2,7 @@
 
 ## 为什么用 sqlite 而不是 ORM
 
-本插件只有 5 张小表、没有迁移历史需求。用 `nonebot-plugin-orm` 会引入 alembic 迁移文件
+本插件只有 8 张小表、没有迁移历史需求。用 `nonebot-plugin-orm` 会引入 alembic 迁移文件
 （revision 必须在**进程内跨插件全局唯一**，历史上已被这块坑过），而 qbot 宿主还设了
 `ALEMBIC_STARTUP_CHECK=false` —— 那条路径会在启动时 `migrate.sync` 并 **DROP 掉本进程
 没有模型的表**。纯 stdlib 的独立库文件完全不碰这套机制，最省事也最安全。
@@ -33,13 +33,14 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import math
 from pathlib import Path
 import sqlite3
 import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Generator, Sequence
 
 logger = logging.getLogger("nonebot_plugin_waifu")
 
@@ -50,6 +51,10 @@ _T_PENDING = "waifu_pending"
 _T_CD = "waifu_divorce_cd"
 _T_LOCK = "waifu_locked"
 _T_DRAWN = "waifu_drawn"
+#: 关系图**落点解**缓存（2026-10-17，v0.8.0）：把「哪个人占哪个槽位」的解按
+#: 「群 + 图结构指纹」缓存下来。键里的 `sig` 由 `slots.signature_of` 出
+#: （**含簇内成员与边**）—— 关系一变指纹就变 → 旧解自然失效，不需要清理任务。
+_T_SOLUTION = "waifu_layout_solution"
 
 _SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS {_T_MEMBERS} (
@@ -112,6 +117,16 @@ CREATE TABLE IF NOT EXISTS {_T_DRAWN} (
     partner_id INTEGER NOT NULL,
     drawn_at   REAL    NOT NULL,
     PRIMARY KEY (group_id, user_id, date_key, partner_id)
+);
+
+CREATE TABLE IF NOT EXISTS {_T_SOLUTION} (
+    group_id   INTEGER NOT NULL,
+    sig        TEXT    NOT NULL,
+    uids       TEXT    NOT NULL,
+    cost       REAL    NOT NULL,
+    budget_s   REAL    NOT NULL,
+    updated_at REAL    NOT NULL,
+    PRIMARY KEY (group_id, sig)
 );
 """
 
@@ -621,6 +636,97 @@ def purge_pending_before(*, now: float, window: float) -> int:
         return int(cur.rowcount)
 
 
+# --------------------------------------------------------------------------- #
+# 关系图落点解缓存（v0.8.0）
+#
+# 键 = `(群, 图结构指纹)`，值 = **按槽位顺序**排列的 uid 序列（`uids` 存逗号分隔）。
+# 指纹由 `slots.signature_of(members, edges)` 出（成员与边都进）——所以**关系一变
+# 指纹就变**，旧解读不到、也就自动失效，没有清理任务、也不会拿旧解去画新图。
+# --------------------------------------------------------------------------- #
+
+
+def get_layout_solution(*, group_id: int, sig: str) -> tuple[int, ...] | None:
+    """取某群某图指纹下的落点解（槽位顺序的 uid 序列）；没有 → `None`。
+
+    ⚠️ 读到的坏行（空串 / 非数字）**当成没有**（返回 None，让调用方重新求解）：
+    这条路径在出图命令里，抛出去的表现就是「发命令没反应」。
+    """
+    with _conn() as conn:
+        row = conn.execute(
+            f"SELECT uids FROM {_T_SOLUTION} WHERE group_id = ? AND sig = ?",
+            (group_id, sig),
+        ).fetchone()
+    if row is None:
+        return None
+    raw = str(row["uids"]).strip()
+    if not raw:
+        return None
+    try:
+        return tuple(int(part) for part in raw.split(","))
+    except ValueError:
+        logger.warning("落点解缓存行坏了（sig=%s），当成没有", sig)
+        return None
+
+
+def get_layout_solution_budget(*, group_id: int, sig: str) -> float | None:
+    """取某群某图指纹下那份解**是用多大秒预算算出来的**（`budget_s` 列）。
+
+    后台精修拿它做「只允许更强预算覆盖」的守卫（弱预算的解不许把强解换掉，
+    `handle._layout_refine`）。行不存在 / 坏值 / 非有限值 → `None`（= 没有可比对象）。
+
+    ⚠️ 与 `get_layout_solution` 同一口径：**绝不抛**（这条路径在出图命令里）。
+    """
+    with _conn() as conn:
+        row = conn.execute(
+            f"SELECT budget_s FROM {_T_SOLUTION} WHERE group_id = ? AND sig = ?",
+            (group_id, sig),
+        ).fetchone()
+    if row is None:
+        return None
+    try:
+        value = float(row["budget_s"])
+    except (TypeError, ValueError):
+        logger.warning("落点解缓存的预算列坏了（sig=%s），当成没有", sig)
+        return None
+    return value if math.isfinite(value) else None
+
+
+def save_layout_solution(
+    *,
+    group_id: int,
+    sig: str,
+    uids: Sequence[int],
+    cost: float,
+    budget_s: float,
+) -> None:
+    """写入/覆盖某群某图指纹的落点解（UPSERT，主键 `(group_id, sig)`）。
+
+    后台精修就是靠这次覆盖把满预算的新解换上去（下次出图直接用）。
+    ⚠️ 空 `uids` **不写**：写进去下次读回空序列，等于给这一簇下毒。
+    """
+    if not uids:
+        return
+    with _conn() as conn:
+        conn.execute(
+            f"INSERT INTO {_T_SOLUTION}"
+            " (group_id, sig, uids, cost, budget_s, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT (group_id, sig) DO UPDATE SET"
+            "   uids = excluded.uids,"
+            "   cost = excluded.cost,"
+            "   budget_s = excluded.budget_s,"
+            "   updated_at = excluded.updated_at",
+            (
+                group_id,
+                sig,
+                ",".join(str(int(u)) for u in uids),
+                float(cost),
+                float(budget_s),
+                time.time(),
+            ),
+        )
+
+
 __all__ = [
     "clear_drawn_partner",
     "clear_pending",
@@ -630,6 +736,8 @@ __all__ = [
     "divorce",
     "drawn_partners",
     "get_daily",
+    "get_layout_solution",
+    "get_layout_solution_budget",
     "get_locked_partner",
     "get_member",
     "get_partner",
@@ -648,6 +756,7 @@ __all__ = [
     "marry",
     "purge_pending_before",
     "record_drawn",
+    "save_layout_solution",
     "set_daily",
     "set_pending",
     "touch_member",
