@@ -2,6 +2,11 @@
 
 NoneBot2 插件（OneBot V11 群聊）：从群内活跃成员里抽一位当「今日老婆」，支持换一只 / 确认 / 娶老婆 / 离婚 / 超管指婚，结果一律以卡片图呈现。
 
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
+[![License](https://img.shields.io/badge/license-MIT-blue)](pyproject.toml)
+
+> **qbot 插件** · 宿主仓库：[xinvxueyuan/qbot](https://github.com/xinvxueyuan/qbot)
+
 > 「今日老婆」从一个**活跃度池**里抽人：只要在群里发过言的人就会进池子
 > （不活跃的人抽不到）。抽签、配额、跨天判定全部落 sqlite，
 > 进程被杀 / 机器重启都不会丢。
@@ -13,7 +18,7 @@ NoneBot2 插件（OneBot V11 群聊）：从群内活跃成员里抽一位当「
 > **所有命令回执都是图片**：抽取/确认/娶/离/配额/已抽遍/用法/空状态一律出图
 > （渲染不可用时回退**信息等价**的纯文本）。
 
-## 功能
+## 功能特性
 
 - **活跃度池抽取**：只要在群里发过言就会进池（`on_message` catch-all、`block=False`，
   只记一笔活跃度，从不阻断传播、从不回消息）；不活跃的人抽不到。
@@ -43,29 +48,48 @@ NoneBot2 插件（OneBot V11 群聊）：从群内活跃成员里抽一位当「
   渲染不可用时回退字段一致的纯文本。**抽取结果消息不含任何 `@`**。
 - **容灾**：抽签、配额、跨天判定、待确认请求全落 sqlite，进程被杀 / 机器重启都不丢；
   跨天按 `Asia/Shanghai` 算「当天」，每天 0 点重置当日老婆与配额。
-- **配置驱动**：13 个环境变量旋钮（命令词、取向、配额、上限、优先级…）；
+- **配置驱动**：17 个环境变量旋钮（命令词、取向、配额、上限、优先级…）；
   配置写错**不炸插件**（告警并回退默认 / 自动纠正）。
 
-## 命令
+## 安装
 
-| 命令 | 别名 | 说明 |
-|---|---|---|
-| `今日老婆` | `/今日老婆`、`抽老婆`、`/抽老婆` | 当天**首次**抽取并锁定为今日老婆；之后再发**只展示**（不换人、不消耗次数） |
-| `换老婆`（**可配**） | `/换老婆`（生产 `/换一只`） | **这个才是更换词**，每次重新抽（消耗 1 次配额）。**同一天内不会重复抽到同一个人**（首次抽到的那位也算）。命令词由 `WAIFU_CHANGE_CMD` 决定：默认 `换老婆`，**生产用 `换一只`** |
-| `确认老婆` | `/确认老婆` | 锁定今日老婆（关系图上记为「**倾心**」）。**只影响自己**：你之后抽签不会再抽到 ta；**不锁对方**（别人仍可能抽到 ta）。每日恢复 |
-| `娶老婆 @某人`（可一次 @ 多人，别名：`结婚`） | `结婚`、`/娶老婆`、`/结婚` | 需**双方互相发**；3 分钟内有效；绑定后双方仍照常参与每日抽取（2026-10-14 起）；单配（`WAIFU_MAX_PARTNERS=1`）下对方已婚则娶不了。**可一次 @ 多人**（也接受多个空格/逗号分隔的 QQ 号）：对每人各发一次请求、各算各的 |
-| `离婚 @某人`（或 `离婚 QQ号`） | `/离婚` | **无需对方同意**：单人发一句即生效（收命令当场解除，不必等 ta 回发）；离婚后可立即再抽。只解除**这一对**（多配偶下其它关系不受影响） |
-| `老婆关系图`（**可配**） | `/老婆关系图` | 把本群关系画成**人物关系图**（夫妻 / 倾心 / 喜欢）：焦点居中、一度关系环绕、**边上直接写关系名**；有向关系（倾心 / 喜欢）用**两端端口圆**标方向（**实心=发起方、空心=被指向的一方**），关系名**白底胶囊**、**沿线条旋转、底边贴线**。图由 **G6 v4（AntV）**组件库绘制（头像节点 + 矢量边；`g6.min.js` 随包分发、出图时内联）；**人多自动分多环**（≤11 人单环，最多 3 环）并**按需加宽卡片**（封顶 1440px），节点不会互相重叠；**落点按簇求解**（v0.8.0，默认开；首次短预算 + 后台精修 + 按图指纹缓存，可 `WAIFU_LAYOUT_SOLVE=false` 回到历史落点）。**可 `@某人`** 只看 ta 的一度关系，**也可一次 `@` 多个人**（合并成一张图：每个人的一度关系都画上，副标题写「以「A、B」为中心」；其中有人没有任何关系时照画、只在页脚注明），无参看全图；渲染不可用时回退纯文本（带同一条图例）。命令词由 `WAIFU_GRAPH_CMD` 决定（默认 `老婆关系图`） |
-| `指婚 @a @b @c`（**超管**） | `/指婚` | **仅 `WIFE_SUPERUSERS` 白名单可用**（不在白名单里连回执都收不到）：**字面绕过双方** —— 第一位是发起人，其余人**直接**与 ta 绑定（不用回发确认、不看 `WAIFU_MAX_PARTNERS`、不挡机器人）。要解除用 `离婚 @某人` |
+### 依赖
 
-「换老婆」的命令词是**配置可变**的（`WAIFU_CHANGE_CMD`）：源码默认 `换老婆`，
-生产 `.env` 写 `WAIFU_CHANGE_CMD=换一只` 即切换命令词，斜杠别名 `/换一只` 会跟着变。
-「老婆关系图」同理（`WAIFU_GRAPH_CMD`，默认 `老婆关系图`，斜杠别名跟着走）。
+- 运行依赖：`nonebot2 >= 2.5.0`、`nonebot-adapter-onebot >= 2.4.6`（OneBot V11）、
+  `nonebot-plugin-localstore >= 0.7.4`（数据目录）、`tzdata >= 2025.1`（`Asia/Shanghai` 时区数据）、
+  `httpx >= 0.26.0,<1.0.0`（头像下载）
+- （可选）额外依赖：`nonebot-plugin-htmlrender == 0.6.7` + `playwright install chromium`
+  （结果卡片渲染成图；缺了回退纯文本）
+- 出图用的 JS 组件库**随包分发**、不需要 npm：`assets/g6.min.js`
+  （[`@antv/g6`](https://github.com/antvis/G6) v4.8.25 · MIT · © 2018 Alipay.inc ·
+  1,570,257B · sha256 `cb6283ad…`，许可全文见 `assets/G6-LICENSE.txt`）。
+  出图时**内联**进 HTML —— htmlrender 走 `set_content`，相对路径的 `<script src>` 不生效。
+  **没有新增 Python 依赖。**
+- Python：`>= 3.10`（以 `pyproject.toml` 的 `requires-python` 为准）
 
-「指婚」是**超管逃生门**：命令词固定（不做配置项），白名单走 `WIFE_SUPERUSERS`，
-非白名单用户在**响应器层**就被拦掉（连用法回执都收不到，不暴露这个功能）。
-语义是**字面绕过**：不产生待确认请求、不看配偶上限（单配 `WAIFU_MAX_PARTNERS=1`
-下也照样能「a 娶 b 和 c」）、不挡机器人、对方已婚也照样绑；顺带把旧的求婚请求作废。
+### 宿主侧安装（git 子模块）
+
+宿主以 git 子模块引入：
+
+```bash
+git submodule add -b main https://github.com/xinvxueyuan/nonebot-plugin-waifu.git \
+  vendor/nonebot-plugin-waifu
+git -C vendor/nonebot-plugin-waifu checkout <钉定的 SHA>
+```
+
+宿主 `[tool.nonebot] plugin_dirs` 加一行 `vendor/nonebot-plugin-waifu/src/plugins`：
+
+```toml
+[tool.nonebot]
+plugin_dirs = ["vendor/nonebot-plugin-waifu/src/plugins"]
+```
+
+`.env` 里加两行（示例，按需改）：
+
+```
+WAIFU_CHANGE_CMD=换一只
+WAIFU_HEADLINE_TEMPLATE={drawer}, 你今天的群幼老婆是 {partner}（{user_id}）
+```
 
 ## 配置
 
@@ -95,68 +119,78 @@ NoneBot2 插件（OneBot V11 群聊）：从群内活跃成员里抽一位当「
 > 优先级写反了命令会被监听抢先。写反**不会让插件起不来** —— 只告警并自动把监听优先级
 > 调成 `命令优先级 + 2`。
 
-## 依赖与安装
+### 取向（`WAIFU_ORIENTATION`）三档
 
-- 运行依赖：`nonebot2 >= 2.5.0`、`nonebot-adapter-onebot >= 2.4.6`（OneBot V11）、
-  `nonebot-plugin-localstore >= 0.7.4`（数据目录）、`tzdata >= 2025.1`（`Asia/Shanghai` 时区数据）、
-  `httpx >= 0.26.0,<1.0.0`（头像下载）
-- （可选）额外依赖：`nonebot-plugin-htmlrender == 0.6.7` + `playwright install chromium`
-  （结果卡片渲染成图；缺了回退纯文本）
-- 出图用的 JS 组件库**随包分发**、不需要 npm：`assets/g6.min.js`
-  （[`@antv/g6`](https://github.com/antvis/G6) v4.8.25 · MIT · © 2018 Alipay.inc ·
-  1,570,257B · sha256 `cb6283ad…`，许可全文见 `assets/G6-LICENSE.txt`）。
-  出图时**内联**进 HTML —— htmlrender 走 `set_content`，相对路径的 `<script src>` 不生效。
-  **没有新增 Python 依赖。**
-- 安装（宿主以 git 子模块引入）：
+| 写法 | 中文 | 行为 |
+|---|---|---|
+| `normal` / `正常` | 正常 | **只抽异性** |
+| `all` / `所有` | 所有 | **不限**（**默认**）；此时不查性别、零额外 API 调用 |
+| `reverse` / `相反` | 相反 | **只抽同性** |
 
-```bash
-git submodule add -b main https://github.com/xinvxueyuan/nonebot-plugin-waifu.git \
-  vendor/nonebot-plugin-waifu
-git -C vendor/nonebot-plugin-waifu checkout <钉定的 SHA>
-```
+- **群员性别隐藏 / 查不到的一律判为通过** —— 不会因为查不到性别就把人排除。
+- `.env` 里**写中文也行**（`WAIFU_ORIENTATION=正常`），会被自动映射。
+- 「所有」是默认档，也就是「不判断性取向」那种行为。
+- 也收下英文别名：`any` → `all`、`opposite` → `reverse`。
 
-- 宿主 `[tool.nonebot] plugin_dirs` 加一行 `vendor/nonebot-plugin-waifu/src/plugins`：
+### 结果卡片首行（可配）
 
-```toml
-[tool.nonebot]
-plugin_dirs = ["vendor/nonebot-plugin-waifu/src/plugins"]
-```
-
-- `.env` 里加两行（示例，按需改）：
+默认（源码里）是：
 
 ```
-WAIFU_CHANGE_CMD=换一只
+{你的昵称}, 你今天的群友老婆是 {老婆昵称}（{QQ}）
+```
+
+**生产用 `WAIFU_HEADLINE_TEMPLATE` 覆盖成「群幼」**：
+
+```
 WAIFU_HEADLINE_TEMPLATE={drawer}, 你今天的群幼老婆是 {partner}（{user_id}）
 ```
 
-## 测试与门禁
+三个占位符固定为 `{drawer}`（抽的人的昵称）/ `{partner}`（老婆昵称）/ `{user_id}`（QQ 号）。
+**占位符写错会让文案回退成默认模板并在日志里告警** —— 不会让命令变成「没反应」。
 
-```bash
-uv sync --all-groups                                    # 首次：装齐 dev / lint 组
-uv run python -m pytest tests/ -q                       # 单测
-uv run ruff check . && uv run ruff format --check .     # lint + 格式
-uv run pyright                                          # 类型（strict）
-uv run python scripts/mutation_check.py                 # 变异门禁
-```
+卡片正文另行列 QQ号、昵称、性别、头像、最后发言时间。
 
-- 本机 uv 约定：先清掉可能已导出的 `UV_PYTHON` / `UV_PROJECT_ENVIRONMENT` /
-  `SSL_CERT_FILE` / `VIRTUAL_ENV` / `PYTHONPATH`，即
-  `env -u UV_PYTHON -u UV_PROJECT_ENVIRONMENT -u SSL_CERT_FILE -u VIRTUAL_ENV -u PYTHONPATH uv run ...`；
-  `scripts/mutation_check.py` 起子进程时会自己清这层变量。
-- **变异门禁**（`scripts/mutation_check.py`）：把每处修复**故意改坏**，确认对应测试真的变红
-  —— 没红过的断言只是装饰。锚点命中数不等于 1 会判「跳过」并计入分母，跳过即退出码非 0。
-- **Windows 上跑变异门禁要给它一个干净临时根**：pytest 收尾会清理历史临时目录
-  （`%TEMP%\pytest-of-*`；被 kill 过的历史用例可能留下删不掉的 `pytest-current`），清不掉就抛
-  `WinError 5` 把**基线判红**（日志里只有一行「基线已红」，看不到任何测试细节）；而
-  `scripts/mutation_check.py` 起子进程时**不带** `--basetemp`。修法：
-  `TMPDIR=<全新目录> TEMP=<全新目录> TMP=<全新目录> uv run python scripts/mutation_check.py`。
-- 真渲染验收（`tests/test_graph_g6_render.py`）会**真起 Chromium**（走 htmlrender）出一张
-  关系图并逐像素验收：非空白、沿边采样命中边色、头像圆心命中头像色、**把卡片底色换成非白
-  以证明胶囊底真的是白的**、端点圆实心/空心；没装 playwright 浏览器时该文件整体 skip。
-- 当前实测：`pytest` **376 passed**（0.8.0 收尾）；`ruff` 0 问题、`ruff format --check` 42 文件
-  已格式化；`pyright` 0 errors；变异门禁 **72 条**（本轮新增 10 条：MN45~MN54，逐条隔离预检捕获）。
+## 使用 / 命令
 
-## 口径说明
+| 命令 | 别名 | 说明 |
+|---|---|---|
+| `今日老婆` | `/今日老婆`、`抽老婆`、`/抽老婆` | 当天**首次**抽取并锁定为今日老婆；之后再发**只展示**（不换人、不消耗次数） |
+| `换老婆`（**可配**） | `/换老婆`（生产 `/换一只`） | **这个才是更换词**，每次重新抽（消耗 1 次配额）。**同一天内不会重复抽到同一个人**（首次抽到的那位也算）。命令词由 `WAIFU_CHANGE_CMD` 决定：默认 `换老婆`，**生产用 `换一只`** |
+| `确认老婆` | `/确认老婆` | 锁定今日老婆（关系图上记为「**倾心**」）。**只影响自己**：你之后抽签不会再抽到 ta；**不锁对方**（别人仍可能抽到 ta）。每日恢复 |
+| `娶老婆 @某人`（可一次 @ 多人，别名：`结婚`） | `结婚`、`/娶老婆`、`/结婚` | 需**双方互相发**；3 分钟内有效；绑定后双方仍照常参与每日抽取（2026-10-14 起）；单配（`WAIFU_MAX_PARTNERS=1`）下对方已婚则娶不了。**可一次 @ 多人**（也接受多个空格/逗号分隔的 QQ 号）：对每人各发一次请求、各算各的 |
+| `离婚 @某人`（或 `离婚 QQ号`） | `/离婚` | **无需对方同意**：单人发一句即生效（收命令当场解除，不必等 ta 回发）；离婚后可立即再抽。只解除**这一对**（多配偶下其它关系不受影响） |
+| `老婆关系图`（**可配**） | `/老婆关系图` | 把本群关系画成**人物关系图**（夫妻 / 倾心 / 喜欢）：焦点居中、一度关系环绕、**边上直接写关系名**；有向关系（倾心 / 喜欢）用**两端端口圆**标方向（**实心=发起方、空心=被指向的一方**），关系名**白底胶囊**、**沿线条旋转、底边贴线**。图由 **G6 v4（AntV）**组件库绘制（头像节点 + 矢量边；`g6.min.js` 随包分发、出图时内联）；**人多自动分多环**（≤11 人单环，最多 3 环）并**按需加宽卡片**（封顶 1440px），节点不会互相重叠；**落点按簇求解**（v0.8.0，默认开；首次短预算 + 后台精修 + 按图指纹缓存，可 `WAIFU_LAYOUT_SOLVE=false` 回到历史落点）。**可 `@某人`** 只看 ta 的一度关系，**也可一次 `@` 多个人**（合并成一张图：每个人的一度关系都画上，副标题写「以「A、B」为中心」；其中有人没有任何关系时照画、只在页脚注明），无参看全图；渲染不可用时回退纯文本（带同一条图例）。命令词由 `WAIFU_GRAPH_CMD` 决定（默认 `老婆关系图`） |
+| `指婚 @a @b @c`（**超管**） | `/指婚` | **仅 `WIFE_SUPERUSERS` 白名单可用**（不在白名单里连回执都收不到）：**字面绕过双方** —— 第一位是发起人，其余人**直接**与 ta 绑定（不用回发确认、不看 `WAIFU_MAX_PARTNERS`、不挡机器人）。要解除用 `离婚 @某人` |
+
+「换老婆」的命令词是**配置可变**的（`WAIFU_CHANGE_CMD`）：源码默认 `换老婆`，
+生产 `.env` 写 `WAIFU_CHANGE_CMD=换一只` 即切换命令词，斜杠别名 `/换一只` 会跟着变。
+「老婆关系图」同理（`WAIFU_GRAPH_CMD`，默认 `老婆关系图`，斜杠别名跟着走）。
+
+「指婚」是**超管逃生门**：命令词固定（不做配置项），白名单走 `WIFE_SUPERUSERS`，
+非白名单用户在**响应器层**就被拦掉（连用法回执都收不到，不暴露这个功能）。
+语义是**字面绕过**：不产生待确认请求、不看配偶上限（单配 `WAIFU_MAX_PARTNERS=1`
+下也照样能「a 娶 b 和 c」）、不挡机器人、对方已婚也照样绑；顺带把旧的求婚请求作废。
+
+### 结果消息 @ 谁
+
+**结果消息完全不含任何 `@`** —— 就是一张卡片图（渲染不可用时回退为**纯文本**），
+不 `@` 抽取人、也不 `@` 被抽中者，不另发消息、不写任何文案。
+
+**被抽中的人不会收到任何提示**（用户 2026-10-10 要求关闭全部 `@`；通知机制已整体关闭）。
+
+只有**报错回执与其它命令**（`今日老婆`/`换一只` 报错、`确认老婆`/`娶老婆`/`离婚` 的回复）
+才 `@` 发命令的那个人。
+
+### 结果卡片
+
+Chromium（htmlrender）渲染，**首行是成句文案**（见上），正文包含：**QQ号、昵称、头像、性别、最后发言时间**。
+头像走公共 CDN（`q.qlogo.cn/headimg_dl`，与 lingchu-bot 前端同一套），
+插件侧下载后转 base64 内联 —— 因为浏览器加载外链图片会带上宿主的网络环境
+（代理 / Cookie 差异）、失败还可能静默，直接把 http 地址写进模板会得到碎图且无报错。头像取不到时显示占位块。
+渲染整体失败时回退纯文本（字段一致），**绝不表现成「命令没反应」**。
+
+### 口径说明
 
 - **配额**：每人每天最多抽 **20** 次（`WAIFU_DAILY_LIMIT`）。**所有「抽」都计数** ——
   当天首次抽取 + 每次「换老婆」都算一次。超限文案是逐字指定的「渣男，你今天没有老婆了！」。
@@ -210,60 +244,56 @@ uv run python scripts/mutation_check.py                 # 变异门禁
   「今天群里的人你已经抽遍了，明天再来」（次日恢复）。
 - **跨天**：按 `Asia/Shanghai` 算「当天」，每天 0 点重置当日老婆与配额。
 
-## 取向（`WAIFU_ORIENTATION`）三档
+## 开发与测试
 
-| 写法 | 中文 | 行为 |
-|---|---|---|
-| `normal` / `正常` | 正常 | **只抽异性** |
-| `all` / `所有` | 所有 | **不限**（**默认**）；此时不查性别、零额外 API 调用 |
-| `reverse` / `相反` | 相反 | **只抽同性** |
-
-- **群员性别隐藏 / 查不到的一律判为通过** —— 不会因为查不到性别就把人排除。
-- `.env` 里**写中文也行**（`WAIFU_ORIENTATION=正常`），会被自动映射。
-- 「所有」是默认档，也就是「不判断性取向」那种行为。
-- 也收下英文别名：`any` → `all`、`opposite` → `reverse`。
-
-## 结果卡片首行（可配）
-
-默认（源码里）是：
-
-```
-{你的昵称}, 你今天的群友老婆是 {老婆昵称}（{QQ}）
+```bash
+uv sync --all-groups                                    # 首次：装齐 dev / lint 组
+uv run python -m pytest tests/ -q                       # 单测
+uv run ruff check . && uv run ruff format --check .     # lint + 格式
+uv run pyright                                          # 类型（strict）
+uv run python scripts/mutation_check.py                 # 变异门禁
 ```
 
-**生产用 `WAIFU_HEADLINE_TEMPLATE` 覆盖成「群幼」**：
+- 本机 uv 约定：先清掉可能已导出的 `UV_PYTHON` / `UV_PROJECT_ENVIRONMENT` /
+  `SSL_CERT_FILE` / `VIRTUAL_ENV` / `PYTHONPATH`，即
+  `env -u UV_PYTHON -u UV_PROJECT_ENVIRONMENT -u SSL_CERT_FILE -u VIRTUAL_ENV -u PYTHONPATH uv run ...`；
+  `scripts/mutation_check.py` 起子进程时会自己清这层变量。
+- **变异门禁**（`scripts/mutation_check.py`）：把每处修复**故意改坏**，确认对应测试真的变红
+  —— 没红过的断言只是装饰。锚点命中数不等于 1 会判「跳过」并计入分母，跳过即退出码非 0。
+- **Windows 上跑变异门禁要给它一个干净临时根**：pytest 收尾会清理历史临时目录
+  （`%TEMP%\pytest-of-*`；被 kill 过的历史用例可能留下删不掉的 `pytest-current`），清不掉就抛
+  `WinError 5` 把**基线判红**（日志里只有一行「基线已红」，看不到任何测试细节）；而
+  `scripts/mutation_check.py` 起子进程时**不带** `--basetemp`。修法：
+  `TMPDIR=<全新目录> TEMP=<全新目录> TMP=<全新目录> uv run python scripts/mutation_check.py`。
+- 真渲染验收（`tests/test_graph_g6_render.py`）会**真起 Chromium**（走 htmlrender）出一张
+  关系图并逐像素验收：非空白、沿边采样命中边色、头像圆心命中头像色、**把卡片底色换成非白
+  以证明胶囊底真的是白的**、端点圆实心/空心；没装 playwright 浏览器时该文件整体 skip。
+- 当前实测：`pytest` **376 passed**（0.8.0 收尾）；`ruff` 0 问题、`ruff format --check` 42 文件
+  已格式化；`pyright` 0 errors；变异门禁 **72 条**（本轮新增 10 条：MN45~MN54，逐条隔离预检捕获）。
+
+### 目录结构
 
 ```
-WAIFU_HEADLINE_TEMPLATE={drawer}, 你今天的群幼老婆是 {partner}（{user_id}）
+src/plugins/nonebot_plugin_waifu/    # 插件本体（__init__.py 注册、handle.py 命令、layout.py 几何）
+tests/                               # pytest 用例（含真渲染验收 test_graph_g6_render.py）
+scripts/mutation_check.py            # 变异门禁
+assets/g6.min.js                     # 随包分发的 AntV G6 v4（出图时内联）
 ```
 
-三个占位符固定为 `{drawer}`（抽的人的昵称）/ `{partner}`（老婆昵称）/ `{user_id}`（QQ 号）。
-**占位符写错会让文案回退成默认模板并在日志里告警** —— 不会让命令变成「没反应」。
+## 许可证与相关仓库
 
-卡片正文另行列 QQ号、昵称、性别、头像、最后发言时间。
-
-## 结果消息 @ 谁
-
-**结果消息完全不含任何 `@`** —— 就是一张卡片图（渲染不可用时回退为**纯文本**），
-不 `@` 抽取人、也不 `@` 被抽中者，不另发消息、不写任何文案。
-
-**被抽中的人不会收到任何提示**（用户 2026-10-10 要求关闭全部 `@`；通知机制已整体关闭）。
-
-只有**报错回执与其它命令**（`今日老婆`/`换一只` 报错、`确认老婆`/`娶老婆`/`离婚` 的回复）
-才 `@` 发命令的那个人。
-
-## 结果卡片
-
-Chromium（htmlrender）渲染，**首行是成句文案**（见上），正文包含：**QQ号、昵称、头像、性别、最后发言时间**。
-头像走公共 CDN（`q.qlogo.cn/headimg_dl`，与 lingchu-bot 前端同一套），
-插件侧下载后转 base64 内联 —— 因为浏览器加载外链图片会带上宿主的网络环境
-（代理 / Cookie 差异）、失败还可能静默，直接把 http 地址写进模板会得到碎图且无报错。头像取不到时显示占位块。
-渲染整体失败时回退纯文本（字段一致），**绝不表现成「命令没反应」**。
-
-## 许可
+### 许可证
 
 MIT（见 `pyproject.toml` 的 `license` 字段；仓库暂未附 `LICENSE` 文件）。
 
 **随包分发的第三方资产**：`assets/g6.min.js` 是 [AntV G6](https://github.com/antvis/G6)
 v4.8.25 的官方 `dist/g6.min.js`，**MIT**（© 2018 Alipay.inc），许可全文见
 `assets/G6-LICENSE.txt`。它只在关系图出图时被内联进临时 HTML，不参与插件运行时逻辑。
+
+### 相关仓库
+
+本仓是 [qbot](https://github.com/xinvxueyuan/qbot) 生态里的一个插件；下面这些是它实际打交道的仓库：
+
+- [xinvxueyuan/qbot](https://github.com/xinvxueyuan/qbot) —— NoneBot2 宿主，本仓以 `vendor/nonebot-plugin-waifu` 子模块被它加载。
+- [xinvxueyuan/nonebot-plugin-info](https://github.com/xinvxueyuan/nonebot-plugin-info) —— 菜单插件，读本仓 `__plugin_meta__.extra` 里的 `menu_type`（群内小游戏）/ `commands` / `order` 出菜单与详情。
+- [xinvxueyuan/lingchu-bot](https://github.com/xinvxueyuan/lingchu-bot) —— 同宿主的兄弟插件；结果卡片头像走与它前端同一套 CDN 约定（`q.qlogo.cn/headimg_dl`）。
