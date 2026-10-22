@@ -284,7 +284,7 @@ assets/g6.min.js                     # 随包分发的 AntV G6 v4（出图时内
 
 ### 许可证
 
-MIT（见 `pyproject.toml` 的 `license` 字段；仓库暂未附 `LICENSE` 文件）。
+MIT —— 全文见 [`LICENSE`](LICENSE)；`pyproject.toml` 的 `license` 字段同为 MIT。
 
 **随包分发的第三方资产**：`assets/g6.min.js` 是 [AntV G6](https://github.com/antvis/G6)
 v4.8.25 的官方 `dist/g6.min.js`，**MIT**（© 2018 Alipay.inc），许可全文见
